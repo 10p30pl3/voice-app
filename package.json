@@ -2,6 +2,7 @@
   "name": "voice-app",
   "version": "1.0.0",
   "dependencies": {
+    "dotenv": "^17.3.1",
     "drachtio-fsmrf": "4.1.2",
     "drachtio-srf": "^5.0.6",
     "ws": "^8.19.0"

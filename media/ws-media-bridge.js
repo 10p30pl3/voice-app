@@ -28,26 +28,22 @@ class WsMediaBridge {
         this.socket = ws;
 
         ws.on('message', (raw) => {
-          // community editions normalmente mandam texto/json/base64;
-          // versões mais novas podem mandar binário.
           if (Buffer.isBuffer(raw)) {
             const base64 = raw.toString('base64');
             this.onAudio && this.onAudio(base64);
             return;
           }
 
-          let msg;
-          try {
-            msg = JSON.parse(raw.toString());
-          } catch {
-            // fallback: trata como base64 puro
-            const s = raw.toString();
-            if (s && s.length > 0) this.onAudio && this.onAudio(s);
-            return;
+          const s = raw.toString();
+          if (s && s.length > 0) {
+            // mod_audio_fork normalmente manda binário/base64/json dependendo da config
+            try {
+              const msg = JSON.parse(s);
+              if (msg.audio) this.onAudio && this.onAudio(msg.audio);
+            } catch {
+              this.onAudio && this.onAudio(Buffer.from(s).toString('base64'));
+            }
           }
-
-          if (msg.callId && msg.callId !== this.callId) return;
-          if (msg.audio) this.onAudio && this.onAudio(msg.audio);
         });
 
         ws.on('close', () => {
@@ -55,10 +51,9 @@ class WsMediaBridge {
         });
       });
 
-      await new Promise((resolve) => this.server.listen(PORT, resolve));
+      await new Promise((resolve) => this.server.listen(this.PORT,'0.0.0.0', resolve));
     }
 
-    // tenta descobrir o uuid do canal
     this.channelUuid =
       endpoint.uuid ||
       endpoint.id ||
@@ -66,16 +61,14 @@ class WsMediaBridge {
       endpoint.channelId;
 
     if (!this.channelUuid) {
-      throw new Error('nao consegui descobrir o uuid do canal para uuid_audio_stream');
+      throw new Error('nao consegui descobrir o uuid do canal para uuid_audio_fork');
     }
 
-    const metadata = JSON.stringify({ callId: this.callId });
-    const cmd = `uuid_audio_stream ${this.channelUuid} start ws://127.0.0.1:${PORT}/ws mixed 8k ${metadata}`;
-
-    console.log(`[${this.callId}] iniciando mod_audio_stream: ${cmd}`);
+    const cmd = `uuid_audio_fork ${this.channelUuid} start ws://${AUDIO_FORK_WS_HOST}:${this.port} mono 8000`;
+    console.log(`[${this.callId}] iniciando audio_fork: ${cmd}`);
 
     const response = await this.endpoint.api(cmd);
-    console.log(`[${this.callId}] resposta uuid_audio_stream:`, response?.body || response);
+    console.log(`[${this.callId}] resposta uuid_audio_fork:`, response?.body || response);
   }
 
   async play(base64Audio) {
@@ -91,12 +84,12 @@ class WsMediaBridge {
   async stop() {
     try {
       if (this.endpoint && this.channelUuid) {
-        const cmd = `uuid_audio_stream ${this.channelUuid} stop`;
+        const cmd = `uuid_audio_fork ${this.channelUuid} stop`;
         const response = await this.endpoint.api(cmd);
-        console.log(`[${this.callId}] stop uuid_audio_stream:`, response?.body || response);
+        console.log(`[${this.callId}] stop uuid_audio_fork:`, response?.body || response);
       }
     } catch (err) {
-      console.error(`[${this.callId}] erro stop uuid_audio_stream:`, err.message || err);
+      console.error(`[${this.callId}] erro stop uuid_audio_fork:`, err.message || err);
     }
 
     try { this.socket && this.socket.close(); } catch {}
