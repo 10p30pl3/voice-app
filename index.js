@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 
 const Srf = require('drachtio-srf');
 const Mrf = require('drachtio-fsmrf');
@@ -69,10 +69,9 @@ class OpenAIS2SBridge {
       throw new Error('nao consegui descobrir o uuid do canal para uuid_openai_s2s');
     }
 
-    // 1) abre a conexao websocket do modulo com a OpenAI
     const connectCmd =
       `uuid_openai_s2s ${this.channelUuid} session.create ` +
-      `api.openai.com "v1/realtime?model=${OPENAI_REALTIME_MODEL}" bearer ${OPENAI_API_KEY}`;
+      `api.openai.com /v1/realtime?model=${OPENAI_REALTIME_MODEL} bearer ${OPENAI_API_KEY}`;
 
     console.log(
       `[${this.callId}] openai_s2s connect: ` +
@@ -82,26 +81,23 @@ class OpenAIS2SBridge {
     let response = await this.endpoint.api(connectCmd);
     console.log(`[${this.callId}] resposta connect:`, response?.body || response);
 
-    // workaround simples enquanto nao estamos ouvindo openai_s2s::connect
+    // tempo para o modulo concluir a conexao websocket remota
     await wait(4000);
 
-    // 2) primeiro client.event = response.create
     const responseCreateEvent = {
       type: 'response.create',
       response: {
         modalities: ['text', 'audio'],
-        instructions:
-          'Você é um atendente virtual de suporte. Responda em português do Brasil, de forma objetiva, educada e curta.',
         voice: 'alloy',
         output_audio_format: 'g711_ulaw',
-        temperature: 0.8,
-        max_output_tokens: 4096
+    instructions: 'Cumprimente o usuario no inicio e pergunte como pode ajudar.'
+
       }
     };
 
+    const responseCreateJson = JSON.stringify(responseCreateEvent);
     const responseCreateCmd =
-      `uuid_openai_s2s ${this.channelUuid} client.event ` +
-      `'${JSON.stringify(responseCreateEvent)}'`;
+      `uuid_openai_s2s ${this.channelUuid} client.event ${responseCreateJson}`;
 
     console.log(`[${this.callId}] openai_s2s client.event response.create`);
     response = await this.endpoint.api(responseCreateCmd);
@@ -112,13 +108,9 @@ class OpenAIS2SBridge {
 
     await wait(500);
 
-    // 3) depois client.event = session.update
     const sessionUpdateEvent = {
       type: 'session.update',
       session: {
-        input_audio_transcription: {
-          model: 'whisper-1'
-        },
         turn_detection: {
           type: 'server_vad',
           threshold: 0.8,
@@ -128,9 +120,9 @@ class OpenAIS2SBridge {
       }
     };
 
+    const sessionUpdateJson = JSON.stringify(sessionUpdateEvent);
     const updateCmd =
-      `uuid_openai_s2s ${this.channelUuid} client.event ` +
-      `'${JSON.stringify(sessionUpdateEvent)}'`;
+      `uuid_openai_s2s ${this.channelUuid} client.event ${sessionUpdateJson}`;
 
     console.log(`[${this.callId}] openai_s2s client.event session.update`);
     response = await this.endpoint.api(updateCmd);
@@ -200,7 +192,7 @@ connectMrf();
 
 srf.invite(async (req, res) => {
   if (!mrfReady || !mediaserver) {
-    console.log('FreeSWITCH ainda não está pronto');
+    console.log('FreeSWITCH ainda nao esta pronto');
     return res.send(503);
   }
 
@@ -214,20 +206,32 @@ srf.invite(async (req, res) => {
     console.log(`[${callId}] INVITE recebido de:`, req.callingNumber || req.get('From'));
 
     ({ endpoint, dialog } = await mediaserver.connectCaller(req, res));
-    console.log(`[${callId}] chamada atendida com mídia, modo=openai_s2s`);
+    console.log(`[${callId}] chamada atendida com midia, modo=openai_s2s`);
+
+    await endpoint.execute('playback', '/opt/voice-app/audio/boasvindas.wav');
 
     bridge = new OpenAIS2SBridge();
     await bridge.start({ callId, endpoint });
 
     dialog.on('destroy', async () => {
       console.log(`[${callId}] chamada encerrada`);
-      try { bridge && await bridge.stop(); } catch {}
+      try {
+        if (bridge) await bridge.stop();
+      } catch {}
     });
   } catch (err) {
     console.error(`[${callId}] erro na chamada:`, err);
 
-    try { res.send(500); } catch {}
-    try { if (dialog) dialog.destroy(); } catch {}
-    try { bridge && await bridge.stop(); } catch {}
+    try {
+      res.send(500);
+    } catch {}
+
+    try {
+      if (dialog) dialog.destroy();
+    } catch {}
+
+    try {
+      if (bridge) await bridge.stop();
+    } catch {}
   }
 });
