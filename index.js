@@ -79,30 +79,38 @@ class OpenAIS2SBridge {
 
     console.log(
       `[${this.callId}] openai_s2s connect: ` +
-        connectCmd.replace(OPENAI_API_KEY, '***REDACTED***')
+      connectCmd.replace(OPENAI_API_KEY, '***REDACTED***')
     );
 
     let response = await this.endpoint.api(connectCmd);
     console.log(`[${this.callId}] resposta connect:`, response?.body || response);
 
-    // espera a conexao estabilizar antes de configurar a sessao
+    // deixa a conexao estabilizar
     await wait(4000);
 
-const sessionUpdateEvent = {
-  type: 'session.update',
-  session: {
-    prompt: {
-      id: OPENAI_PROMPT_ID
-    },
-    turn_detection: {
-      type: 'server_vad',
-      threshold: 0.9,
-      prefix_padding_ms: 200,
-      silence_duration_ms: 700,
-      interrupt_response: true
-    }
-  }
-};
+    const sessionUpdateEvent = {
+      type: 'session.update',
+      session: {
+        prompt: {
+          id: OPENAI_PROMPT_ID
+        },
+        input_audio_transcription: {
+          model: 'gpt-4o-mini-transcribe'
+        },
+        input_audio_noise_reduction: {
+          type: 'near_field'
+        },
+        max_response_output_tokens: 4096,
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
+          interrupt_response: true
+        }
+      }
+    };
+
     const sessionUpdateJson = JSON.stringify(sessionUpdateEvent);
     const updateCmd =
       `uuid_openai_s2s ${this.channelUuid} client.event ${sessionUpdateJson}`;
@@ -115,6 +123,7 @@ const sessionUpdateEvent = {
       `[${this.callId}] resposta session.update event:`,
       response?.body || response
     );
+    console.log(`[${this.callId}] sessao configurada; aguardando fala do usuario`);
   }
 
   async stop() {
@@ -193,7 +202,7 @@ srf.invite(async (req, res) => {
     ({ endpoint, dialog } = await mediaserver.connectCaller(req, res));
     console.log(`[${callId}] chamada atendida com mídia, modo=openai_s2s`);
 
-    // pequeno atraso para evitar ruido logo no inicio
+    // pequeno atraso para reduzir artefato no inicio
     await wait(700);
 
     bridge = new OpenAIS2SBridge();
