@@ -13,6 +13,9 @@ const FREESWITCH_SECRET = process.env.FREESWITCH_SECRET || 'JambonzR0ck$';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini';
+const OPENAI_PROMPT_ID =
+  process.env.OPENAI_PROMPT_ID ||
+  'pmpt_699c6d29234081909e3ce4c9ac9c32ed051663f2fadd92d8';
 
 if (!OPENAI_API_KEY) {
   console.error('faltou OPENAI_API_KEY');
@@ -75,13 +78,12 @@ class OpenAIS2SBridge {
 
     console.log(
       `[${this.callId}] openai_s2s connect: ` +
-      connectCmd.replace(OPENAI_API_KEY, '***REDACTED***')
+        connectCmd.replace(OPENAI_API_KEY, '***REDACTED***')
     );
 
     let response = await this.endpoint.api(connectCmd);
     console.log(`[${this.callId}] resposta connect:`, response?.body || response);
 
-    // tempo para o modulo concluir a conexao websocket remota
     await wait(4000);
 
     const responseCreateEvent = {
@@ -89,9 +91,7 @@ class OpenAIS2SBridge {
       response: {
         modalities: ['text', 'audio'],
         voice: 'alloy',
-        output_audio_format: 'g711_ulaw',
-    instructions: 'Cumprimente o usuario no inicio e pergunte como pode ajudar.'
-
+        output_audio_format: 'g711_ulaw'
       }
     };
 
@@ -111,6 +111,9 @@ class OpenAIS2SBridge {
     const sessionUpdateEvent = {
       type: 'session.update',
       session: {
+        prompt: {
+          id: OPENAI_PROMPT_ID
+        },
         turn_detection: {
           type: 'server_vad',
           threshold: 0.8,
@@ -124,7 +127,9 @@ class OpenAIS2SBridge {
     const updateCmd =
       `uuid_openai_s2s ${this.channelUuid} client.event ${sessionUpdateJson}`;
 
-    console.log(`[${this.callId}] openai_s2s client.event session.update`);
+    console.log(
+      `[${this.callId}] openai_s2s client.event session.update usando prompt ${OPENAI_PROMPT_ID}`
+    );
     response = await this.endpoint.api(updateCmd);
     console.log(
       `[${this.callId}] resposta session.update event:`,
@@ -206,9 +211,7 @@ srf.invite(async (req, res) => {
     console.log(`[${callId}] INVITE recebido de:`, req.callingNumber || req.get('From'));
 
     ({ endpoint, dialog } = await mediaserver.connectCaller(req, res));
-    console.log(`[${callId}] chamada atendida com midia, modo=openai_s2s`);
-
-    await endpoint.execute('playback', '/opt/voice-app/audio/boasvindas.wav');
+    console.log(`[${callId}] chamada atendida com mídia, modo=openai_s2s`);
 
     bridge = new OpenAIS2SBridge();
     await bridge.start({ callId, endpoint });
