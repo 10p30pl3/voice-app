@@ -12,7 +12,8 @@ const FREESWITCH_PORT = parseInt(process.env.FREESWITCH_PORT || '8021', 10);
 const FREESWITCH_SECRET = process.env.FREESWITCH_SECRET || 'JambonzR0ck$';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini';
+const OPENAI_REALTIME_MODEL =
+  process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini';
 const OPENAI_PROMPT_ID =
   process.env.OPENAI_PROMPT_ID ||
   'pmpt_699c6d29234081909e3ce4c9ac9c32ed051663f2fadd92d8';
@@ -84,45 +85,24 @@ class OpenAIS2SBridge {
     let response = await this.endpoint.api(connectCmd);
     console.log(`[${this.callId}] resposta connect:`, response?.body || response);
 
+    // espera a conexao estabilizar antes de configurar a sessao
     await wait(4000);
 
-    const responseCreateEvent = {
-      type: 'response.create',
-      response: {
-        modalities: ['text', 'audio'],
-        voice: 'alloy',
-        output_audio_format: 'g711_ulaw'
-      }
-    };
-
-    const responseCreateJson = JSON.stringify(responseCreateEvent);
-    const responseCreateCmd =
-      `uuid_openai_s2s ${this.channelUuid} client.event ${responseCreateJson}`;
-
-    console.log(`[${this.callId}] openai_s2s client.event response.create`);
-    response = await this.endpoint.api(responseCreateCmd);
-    console.log(
-      `[${this.callId}] resposta response.create event:`,
-      response?.body || response
-    );
-
-    await wait(500);
-
-    const sessionUpdateEvent = {
-      type: 'session.update',
-      session: {
-        prompt: {
-          id: OPENAI_PROMPT_ID
-        },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.8,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500
-        }
-      }
-    };
-
+const sessionUpdateEvent = {
+  type: 'session.update',
+  session: {
+    prompt: {
+      id: OPENAI_PROMPT_ID
+    },
+    turn_detection: {
+      type: 'server_vad',
+      threshold: 0.9,
+      prefix_padding_ms: 200,
+      silence_duration_ms: 700,
+      interrupt_response: true
+    }
+  }
+};
     const sessionUpdateJson = JSON.stringify(sessionUpdateEvent);
     const updateCmd =
       `uuid_openai_s2s ${this.channelUuid} client.event ${sessionUpdateJson}`;
@@ -212,6 +192,9 @@ srf.invite(async (req, res) => {
 
     ({ endpoint, dialog } = await mediaserver.connectCaller(req, res));
     console.log(`[${callId}] chamada atendida com mídia, modo=openai_s2s`);
+
+    // pequeno atraso para evitar ruido logo no inicio
+    await wait(700);
 
     bridge = new OpenAIS2SBridge();
     await bridge.start({ callId, endpoint });
