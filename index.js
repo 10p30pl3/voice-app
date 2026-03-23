@@ -85,8 +85,7 @@ class OpenAIS2SBridge {
     let response = await this.endpoint.api(connectCmd);
     console.log(`[${this.callId}] resposta connect:`, response?.body || response);
 
-    // deixa a conexao estabilizar
-    await wait(4000);
+    await wait(6000);
 
     const sessionUpdateEvent = {
       type: 'session.update',
@@ -202,8 +201,7 @@ srf.invite(async (req, res) => {
     ({ endpoint, dialog } = await mediaserver.connectCaller(req, res));
     console.log(`[${callId}] chamada atendida com mídia, modo=openai_s2s`);
 
-    // pequeno atraso para reduzir artefato no inicio
-    await wait(700);
+    await wait(1200);
 
     bridge = new OpenAIS2SBridge();
     await bridge.start({ callId, endpoint });
