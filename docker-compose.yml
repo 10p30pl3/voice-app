@@ -7,7 +7,7 @@ services:
       - "--contact"
       - "sip:*;transport=udp,tcp"
       - "--external-ip"
-      - "192.168.68.81"
+      - "192.168.15.36"
       - "--port"
       - "9022"
       - "--secret"
