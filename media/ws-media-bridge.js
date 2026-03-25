@@ -1,7 +1,8 @@
+require('dotenv').config({ override: true });
 const WebSocket = require('ws');
 const http = require('http');
 
-const PORT = 8090;
+const AUDIO_FORK_WS_HOST = process.env.AUDIO_FORK_WS_HOST || '127.0.0.1';
 
 class WsMediaBridge {
   constructor() {
@@ -51,7 +52,12 @@ class WsMediaBridge {
         });
       });
 
-      await new Promise((resolve) => this.server.listen(this.PORT,'0.0.0.0', resolve));
+      await new Promise((resolve) => {
+        this.server.listen(0, '0.0.0.0', () => {
+          this.port = this.server.address().port; // Pega porta aleatória disponível
+          resolve();
+        });
+      });
     }
 
     this.channelUuid =
@@ -65,7 +71,7 @@ class WsMediaBridge {
     }
 
     const cmd = `uuid_audio_fork ${this.channelUuid} start ws://${AUDIO_FORK_WS_HOST}:${this.port} mono 8000`;
-    console.log(`[${this.callId}] iniciando audio_fork: ${cmd}`);
+    console.log(`[${this.callId}] iniciando audio_fork na porta aleatoria ${this.port}: ${cmd}`);
 
     const response = await this.endpoint.api(cmd);
     console.log(`[${this.callId}] resposta uuid_audio_fork:`, response?.body || response);
