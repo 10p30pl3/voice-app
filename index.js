@@ -73,56 +73,79 @@ class OpenAIS2SBridge {
       throw new Error('nao consegui descobrir o uuid do canal para uuid_openai_s2s');
     }
 
+    // Algumas versões do mod_openai esperam JSON, outras esperam tokens separados por espaço.
+    // Vamos tentar o formato de tokens primeiro, que é mais comum em builds drachtio-freeswitch-mrf.
     const connectCmd =
       `uuid_openai_s2s ${this.channelUuid} session.create ` +
       `api.openai.com /v1/realtime?model=${OPENAI_REALTIME_MODEL} bearer ${OPENAI_API_KEY}`;
 
-    console.log(
-      `[${this.callId}] openai_s2s connect: ` +
-      connectCmd.replace(OPENAI_API_KEY, '***REDACTED***')
-    );
+    console.log(`[${this.callId}] iniciando openai_s2s (formato string)...`);
 
     let response = await this.endpoint.api(connectCmd);
     console.log(`[${this.callId}] resposta connect:`, response?.body || response);
 
-    await wait(6000);
+    // Se falhar, tentamos o formato JSON como fallback
+    if (response?.body?.includes('-ERR') || response?.body === '-ERR no reply') {
+      console.log(`[${this.callId}] formato string falhou, tentando formato JSON...`);
+      const sessionConfig = {
+        type: 'session.create',
+        model: OPENAI_REALTIME_MODEL || 'gpt-realtime-mini',
+        api_key: OPENAI_API_KEY
+      };
+      const jsonCmd = `uuid_openai_s2s ${this.channelUuid} session.create '${JSON.stringify(sessionConfig)}'`;
+      response = await this.endpoint.api(jsonCmd);
+      console.log(`[${this.callId}] resposta connect (JSON):`, response?.body || response);
+    }
 
-    const sessionUpdateEvent = {
+    // Aumentado para 5s para garantir que o mod_openai esteja pronto
+    await wait(5000);
+
+    // Configuração com propriedades nativas e válidas para a API Realtime da OpenAI
+    const sessionUpdate = {
       type: 'session.update',
       session: {
+        // OBRIGATÓRIO: A OpenAI precisa saber que deve retornar áudio no formato telefônico G711.
+        modalities: ['audio', 'text'],
+        voice: 'alloy',
+        input_audio_format: 'pcm16',
+        output_audio_format: 'pcm16',
+
+        // Configuração conforme solicitado
         prompt: {
           id: OPENAI_PROMPT_ID
         },
-        input_audio_transcription: {
-          model: 'gpt-4o-mini-transcribe'
-        },
-        input_audio_noise_reduction: {
-          type: 'near_field'
-        },
+
         max_response_output_tokens: 4096,
         turn_detection: {
           type: 'server_vad',
           threshold: 0.5,
           prefix_padding_ms: 300,
-          silence_duration_ms: 500,
-          interrupt_response: true
+          silence_duration_ms: 500
         }
       }
     };
 
-    const sessionUpdateJson = JSON.stringify(sessionUpdateEvent);
-    const updateCmd =
-      `uuid_openai_s2s ${this.channelUuid} client.event ${sessionUpdateJson}`;
+    // Gera o JSON em string e garante que ZERO espaços vão para o ESL (por garantia extrema)
+    const jsonStr = JSON.stringify(sessionUpdate).replace(/\s/g, '');
 
-    console.log(
-      `[${this.callId}] openai_s2s client.event session.update usando prompt ${OPENAI_PROMPT_ID}`
-    );
+    const updateCmd = `uuid_openai_s2s ${this.channelUuid} client.event ${jsonStr}`;
+    console.log(`[${this.callId}] enviando session.update sem espacos:`, updateCmd);
     response = await this.endpoint.api(updateCmd);
-    console.log(
-      `[${this.callId}] resposta session.update event:`,
-      response?.body || response
-    );
-    console.log(`[${this.callId}] sessao configurada; aguardando fala do usuario`);
+    console.log(`[${this.callId}] resposta session.update:`, response?.body || response);
+
+    // Tentar forçar uma resposta inicial
+    const responseCreate = {
+      type: 'response.create',
+      response: {
+        modalities: ['audio', 'text'],
+        instructions: 'Diga: Olá, eu sou seu assistente de voz. Já estou te escutando.'
+      }
+    };
+    const triggerCmd = `uuid_openai_s2s ${this.channelUuid} client.event '${JSON.stringify(responseCreate)}'`;
+    console.log(`[${this.callId}] enviando response.create para testar áudio...`);
+    await this.endpoint.api(triggerCmd);
+
+    console.log(`[${this.callId}] sessao configurada e pronta para conversacao`);
   }
 
   async stop() {
@@ -199,9 +222,12 @@ srf.invite(async (req, res) => {
     console.log(`[${callId}] INVITE recebido de:`, req.callingNumber || req.get('From'));
 
     ({ endpoint, dialog } = await mediaserver.connectCaller(req, res));
-    console.log(`[${callId}] chamada atendida com mídia, modo=openai_s2s`);
+    console.log(`[${callId}] chamada atendida....`);
 
-    await wait(1200);
+    // Toca um tom de 1000Hz por 3 segundos. Se não ouvir isso, o problema é Rede/FreeSWITCH.
+    //await endpoint.play('tone_stream://%(3000,0,1000)');
+
+    //console.log(`[${callId}] Tom finalizado. Iniciando modo openai_s2s...`);
 
     bridge = new OpenAIS2SBridge();
     await bridge.start({ callId, endpoint });
@@ -210,21 +236,21 @@ srf.invite(async (req, res) => {
       console.log(`[${callId}] chamada encerrada`);
       try {
         if (bridge) await bridge.stop();
-      } catch {}
+      } catch { }
     });
   } catch (err) {
     console.error(`[${callId}] erro na chamada:`, err);
 
     try {
       res.send(500);
-    } catch {}
+    } catch { }
 
     try {
       if (dialog) dialog.destroy();
-    } catch {}
+    } catch { }
 
     try {
       if (bridge) await bridge.stop();
-    } catch {}
+    } catch { }
   }
 });
