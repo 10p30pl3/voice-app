@@ -86,20 +86,20 @@ class OpenAIS2SBridge {
     
     this.profiles = {
       SILENCE: { 
-        fone: { base: 0.45, prefix: 350, silence: 400, boost: 0.10 },
-        viva: { base: 0.55, prefix: 400, silence: 500, boost: 0.35 }
+        fone: { base: 0.45, prefix: 350, silence: 400, boost: 0.05 },
+        viva: { base: 0.45, prefix: 400, silence: 500, boost: 0.35 }
       },
       OFFICE: { 
-        fone: { base: 0.65, prefix: 450, silence: 500, boost: 0.15 },
-        viva: { base: 0.75, prefix: 500, silence: 600, boost: 0.45 }
+        fone: { base: 0.55, prefix: 400, silence: 500, boost: 0.05 },
+        viva: { base: 0.55, prefix: 500, silence: 600, boost: 0.40 }
       },
       STREET: { 
-        fone: { base: 0.75, prefix: 500, silence: 600, boost: 0.20 },
-        viva: { base: 0.85, prefix: 600, silence: 800, boost: 0.55 }
+        fone: { base: 0.75, prefix: 500, silence: 600, boost: 0.05 },
+        viva: { base: 0.75, prefix: 600, silence: 800, boost: 0.45 }
       },
       TV: { 
-        fone: { base: 0.85, prefix: 600, silence: 800, boost: 0.25 },
-        viva: { base: 0.95, prefix: 800, silence: 1000, boost: 0.65 }
+        fone: { base: 0.95, prefix: 1000, silence: 1200, boost: 0.01 },
+        viva: { base: 0.95, prefix: 1200, silence: 1500, boost: 0.02 }
       }
     };
     this.currentProfile = 'SILENCE';
@@ -250,7 +250,7 @@ class OpenAIS2SBridge {
 
         let calibrated = false;
 
-        // Loop de ajuste dinâmico: a cada 5 segundos reavalia o ambiente
+        // Loop de auto-calibração: roda a cada 2.5s para fechar um diagnóstico em 5s
         this.thresholdTimer = setInterval(async () => {
           
           // 1. Auto-Calibração / Detecção de Dispositivo (Roda apenas uma vez)
@@ -270,12 +270,42 @@ class OpenAIS2SBridge {
             const profile = this.energyManager.getClassification();
             console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Calibração de 1º Passo concluída.`);
             console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Dispositivo: ${this.deviceMode} | Ambiente: ${profile}`);
+
+            // ATIVAÇÃO DE AEC (Echo Cancellation) e ANS (Noise Suppression) NATIVO NO FREESWITCH SOMENTE PARA VIVA-VOZ
+            if (this.deviceMode === 'viva_voz') {
+              console.log(`[${this.callId}] [VIVA-VOZ] Ativando AEC e ANS nativo do FreeSWITCH...`);
+              this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => {});
+              this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => {});
+            } else {
+              console.log(`[${this.callId}] [FONE-OUVIDO] Mantendo AEC desativado para máxima fidelidade sonora.`);
+              this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+            }
           }
 
-          // 2. Classificação Ambiental (Limitada a 2x / 10s conforme solicitado)
-          this.calibrationTicks++;
-          if (this.calibrationTicks <= 2) {
-            this.currentProfile = this.energyManager.getClassification();
+          // 2. Classificação Ambiental (Limitada a 2x / 5s conforme solicitado)
+          if (this.calibrationTicks < 2) {
+            this.calibrationTicks++;
+            const profile = this.energyManager.getClassification();
+            this.currentProfile = profile;
+            
+            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo ${this.calibrationTicks}/2: Ambiente: ${profile}`);
+
+            if (this.calibrationTicks === 2) {
+              console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Janela de 5s concluída. Perfil VAD travado definitivamente.`);
+              clearInterval(this.thresholdTimer);
+              const finalConfig = this.profiles[this.currentProfile][this.deviceMode.includes('fone') ? 'fone' : 'viva'];
+              this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${JSON.stringify({
+                type: 'session.update',
+                session: {
+                  turn_detection: {
+                    type: 'server_vad',
+                    threshold: finalConfig.base,
+                    prefix_padding_ms: finalConfig.prefix,
+                    silence_duration_ms: finalConfig.silence
+                  }
+                }
+              })}`).catch(() => {});
+            }
           }
           
           const profileConfig = this.profiles[this.currentProfile][this.deviceMode.includes('fone') ? 'fone' : 'viva'];
