@@ -287,8 +287,9 @@ class OpenAIS2SBridge {
             this.calibrationTicks++;
             const profile = this.energyManager.getClassification();
             this.currentProfile = profile;
+            const nfValue = this.energyManager.noiseFloor.toFixed(0);
             
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo ${this.calibrationTicks}/2: Ambiente: ${profile}`);
+            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo ${this.calibrationTicks}/2: Ambiente: ${profile} (NF: ${nfValue})`);
 
             if (this.calibrationTicks === 2) {
               console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Janela de 5s concluída. Perfil VAD travado definitivamente.`);

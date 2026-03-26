@@ -40,7 +40,8 @@ class EnergyManager {
       this.echoSamplesCount++;
     } 
     // 2. Se o agente está em silêncio, refinamos o Piso de Ruído (Noise Floor)
-    else if (rms < 3000) { 
+    // Aumentado para 10000 para capturar ambientes de TV alta que antes eram ignorados.
+    else if (rms < 10000) { 
         this.noiseFloor = (this.alpha * rms) + ((1 - this.alpha) * this.noiseFloor);
     }
     
