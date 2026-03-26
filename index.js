@@ -75,23 +75,31 @@ class OpenAIS2SBridge {
     
     // NÍVEL 5: Perfis por Ambiente e Dispositivo (viva_voz vs fone)
     this.deviceMode = 'viva_voz'; // Padrão inicial, será calibrado
+    this.hardeningFactor = 0;    // Nível 6: "Escudo" contra falsos positivos semânticos
+    this.isHardeningLocked = false; // Nível 6.1: Trava definitiva em 0.98 após erro
+    this.lastBargeInTime = 0;
+    
+    // NÍVEL 5.2: Controle de Calibração Limpa
+    this.calibrationActive = true;
+    this.calibrationSamplesRecv = 0;
+    this.calibrationTicks = 0;
     
     this.profiles = {
       SILENCE: { 
-        fone: { base: 0.35, prefix: 200, silence: 400, boost: 0.05 },
-        viva: { base: 0.45, prefix: 300, silence: 500, boost: 0.30 }
+        fone: { base: 0.45, prefix: 350, silence: 400, boost: 0.10 },
+        viva: { base: 0.55, prefix: 400, silence: 500, boost: 0.35 }
       },
       OFFICE: { 
-        fone: { base: 0.50, prefix: 300, silence: 500, boost: 0.10 },
-        viva: { base: 0.60, prefix: 400, silence: 600, boost: 0.40 }
+        fone: { base: 0.65, prefix: 450, silence: 500, boost: 0.15 },
+        viva: { base: 0.75, prefix: 500, silence: 600, boost: 0.45 }
       },
       STREET: { 
-        fone: { base: 0.65, prefix: 400, silence: 600, boost: 0.15 },
-        viva: { base: 0.75, prefix: 600, silence: 800, boost: 0.50 }
+        fone: { base: 0.75, prefix: 500, silence: 600, boost: 0.20 },
+        viva: { base: 0.85, prefix: 600, silence: 800, boost: 0.55 }
       },
       TV: { 
-        fone: { base: 0.75, prefix: 600, silence: 800, boost: 0.20 },
-        viva: { base: 0.85, prefix: 800, silence: 1000, boost: 0.60 }
+        fone: { base: 0.85, prefix: 600, silence: 800, boost: 0.25 },
+        viva: { base: 0.95, prefix: 800, silence: 1000, boost: 0.65 }
       }
     };
     this.currentProfile = 'SILENCE';
@@ -143,6 +151,11 @@ class OpenAIS2SBridge {
 
     // Aumentado para 5s para garantir que o mod_openai esteja pronto
     await wait(3000);
+
+    // DESCOBERTA: Tenta rodar um comando vazio para ver se o FreeSWITCH cospe o USAGE
+    this.endpoint.api(`uuid_openai_s2s ${this.channelUuid}`).then(r => {
+      console.log(`[${this.callId}] [DEBUG USAGE]`, r?.body || r);
+    }).catch(() => {});
 
     // Lê o Nível de Barge-in do ambiente (A autocalibração opera no Nível 5)
     const bargeinLevel = parseInt(process.env.BARGEIN_LEVEL || '5', 10);
@@ -218,37 +231,73 @@ class OpenAIS2SBridge {
           endpoint: this.endpoint,
           onAudio: (base64) => {
             const buffer = Buffer.from(base64, 'base64');
-            this.energyManager.calculateEnergy(buffer, this.isAgentTalking);
+            
+            // NÍVEL 5.2: Calibração Limpa (Greeting-Only)
+            // Só acumulamos energia de Eco durante as primeiras 300 amostras (aprox 6s)
+            // Isso evita que a sua voz no meio da chamada seja confundida com eco de viva-voz.
+            let isEcoSample = false;
+            if (this.calibrationActive && this.isAgentTalking) {
+              isEcoSample = true;
+              this.calibrationSamplesRecv++;
+              if (this.calibrationSamplesRecv > 300) {
+                this.calibrationActive = false;
+              }
+            }
+            
+            this.energyManager.calculateEnergy(buffer, isEcoSample);
           }
         });
 
         let calibrated = false;
 
-        // Loop de ajuste dinâmico: a cada 3 segundos reavalia o ambiente
+        // Loop de ajuste dinâmico: a cada 5 segundos reavalia o ambiente
         this.thresholdTimer = setInterval(async () => {
           
           // 1. Auto-Calibração / Detecção de Dispositivo (Roda apenas uma vez)
           if (!calibrated && this.energyManager.samplesCount > 100) {
-            if (this.isAgentTalking) return; 
+            
+            // Verificamos se há um override manual no .env
+            const override = process.env.DEVICE_MODE;
+            if (override === 'fone_ouvido' || override === 'viva_voz') {
+              this.deviceMode = override;
+              console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Usando OVERRIDE manual (.env): ${this.deviceMode}`);
+            } else {
+              if (this.isAgentTalking) return; 
+              this.deviceMode = this.energyManager.detectDeviceMode();
+            }
 
             calibrated = true;
-            this.deviceMode = this.energyManager.detectDeviceMode();
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Dispositivo detectado: ${this.deviceMode}`);
+            const profile = this.energyManager.getClassification();
+            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Calibração de 1º Passo concluída.`);
+            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Dispositivo: ${this.deviceMode} | Ambiente: ${profile}`);
           }
 
-          // 2. Classificação Ambiental Dinâmica (Roda a cada tick)
-          this.currentProfile = this.energyManager.getClassification();
+          // 2. Classificação Ambiental (Limitada a 2x / 10s conforme solicitado)
+          this.calibrationTicks++;
+          if (this.calibrationTicks <= 2) {
+            this.currentProfile = this.energyManager.getClassification();
+          }
+          
           const profileConfig = this.profiles[this.currentProfile][this.deviceMode.includes('fone') ? 'fone' : 'viva'];
           
-          let suggested = profileConfig.base;
+          // Aplicamos a base do perfil + o fator de endurecimento por erros passados (Nível 6)
+          let suggested = profileConfig.base + this.hardeningFactor;
           
-          // 3. Aplica o "Echo Shield" apenas se o agente estiver falando
-          if (this.isAgentTalking) {
+          // Nível 6.1: Se a trava de hardening foi ativada por erro prévio, força 0.98
+          if (this.isHardeningLocked) {
+            suggested = 0.98;
+          }
+          
+          const isVivaVoz = this.deviceMode.includes('viva');
+          
+          // 3. Aplica o "Echo Shield" apenas se o agente estiver falando E for Viva-voz
+          if (this.isAgentTalking && isVivaVoz) {
             suggested = Math.min(0.98, suggested + profileConfig.boost);
           }
 
           if (Math.abs(suggested - this.currentThreshold) > 0.05) {
-            console.log(`[${this.callId}] Ajuste VAD: ${this.currentThreshold.toFixed(2)} -> ${suggested.toFixed(2)} ${this.isAgentTalking ? '(MODO ECO ATIVO)' : `(${this.currentProfile})`} NF:${this.energyManager.noiseFloor.toFixed(0)}`);
+            const modeTag = this.isAgentTalking && isVivaVoz ? '(MODO ECO ATIVO)' : `(${this.currentProfile})`;
+            console.log(`[${this.callId}] Ajuste VAD: ${this.currentThreshold.toFixed(2)} -> ${suggested.toFixed(2)} ${modeTag} NF:${this.energyManager.noiseFloor.toFixed(0)}`);
             this.currentThreshold = suggested;
             
             const adaptiveUpdate = {
@@ -262,9 +311,17 @@ class OpenAIS2SBridge {
                 } 
               }
             };
-            this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${JSON.stringify(adaptiveUpdate).replace(/\s/g, '')}`).catch(() => {});
+            // Tentativa A: client.event sem aspas e sem espaços
+            const updateJson = JSON.stringify(adaptiveUpdate).replace(/\s/g, '');
+            this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${updateJson}`).then(r => {
+              if (r?.body?.includes('-ERR')) {
+                // Tentativa B: session.update direto como subcomando
+                console.log(`[${this.callId}] client.event falhou, tentando session.update direto...`);
+                this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} session.update ${updateJson}`).catch(() => {});
+              }
+            }).catch(() => {});
           }
-        }, 3000); 
+        }, 5000); 
 
       } catch (err) {
         console.error(`[${this.callId}] Erro ao iniciar captura de áudio (Nível 3):`, err.message);
@@ -296,19 +353,40 @@ class OpenAIS2SBridge {
 
         if (body.type === 'input_audio_buffer.speech_started') {
           console.log(`[${this.callId}] [BARGE-IN NÍVEL 4] Fala detectada! Interrompendo agente...`);
+          this.lastBargeInTime = Date.now();
           
-          // 1. Cancela a resposta E limpa o buffer na OpenAI
-          const cancelCmd = `uuid_openai_s2s ${this.channelUuid} client.event {"type":"response.cancel"}`;
-          const clearCmd = `uuid_openai_s2s ${this.channelUuid} client.event {"type":"input_audio_buffer.clear"}`;
+          // 1. Cancela na OpenAI (Comando lógico)
+          const cancelJson = '{"type":"response.cancel"}';
+          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${cancelJson}`).then(r => {
+             console.log(`[${this.callId}] Resposta cancel: ${r?.body?.trim()}`);
+          }).catch(() => {});
           
-          this.endpoint.api(cancelCmd).catch(() => {});
-          this.endpoint.api(clearCmd).catch(() => {});
+          // 2. Limpa buffers (Comandos lógicos na OpenAI)
+          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event {"type":"input_audio_buffer.clear"}`).catch(() => {});
+          
+          // 3. Reseta estado após o silêncio lógico ser processado (800ms)
+          setTimeout(() => {
+            this.isAgentTalking = false;
+          }, 800);
+        }
 
-          // 2. Limpa o playback no FreeSWITCH
-          this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
+        // NÍVEL 6: Análise Semântica de Falsos Positivos
+        if (body.type === 'conversation.item.input_audio_transcription.completed' && body.transcript) {
+          const text = body.transcript.trim().toLowerCase();
+          const timeSinceBargeIn = Date.now() - this.lastBargeInTime;
           
-          // NOTA SÊNIOR: NÃO setamos isAgentTalking = false aqui. 
-          // Esperamos o evento 'response.done' da OpenAI para garantir que o eco parou de verdade.
+          // Se houve uma interrupção recente (< 5s) e o texto é "lixo" (muito curto ou sem nexo)
+          // Isso indica que foi um barulho da TV que disparou o VAD.
+          if (timeSinceBargeIn < 5000) {
+            const validShortWords = ['sim', 'não', 'nao', 'oi', 'ok', 'vou', 'uma', 'já', 'ja', 'tá', 'ta', 'um', 'é', 'não'];
+            const isJunk = text.length < 2 || (text.length < 4 && !validShortWords.includes(text));
+            if (isJunk) {
+              this.hardeningFactor = Math.min(0.2, this.hardeningFactor + 0.05);
+              this.isHardeningLocked = true; // TRAVA DEFINITIVA EM 0.98
+              console.log(`[${this.callId}] [🚨 CRITICAL HARDENING L6] Falso Positivo detectado ("${text}").`);
+              console.log(`[${this.callId}] [🚨 CRITICAL HARDENING L6] TRAVA VAD ATIVA: 0.98 pelo resto da chamada.`);
+            }
+          }
         }
       } catch (e) { }
     }

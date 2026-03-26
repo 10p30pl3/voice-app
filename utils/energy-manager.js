@@ -55,9 +55,16 @@ class EnergyManager {
     if (this.echoSamplesCount < 10) return 'fone_ouvido'; // Sem dados suficientes
     
     const avgEcho = this.echoEnergySum / this.echoSamplesCount;
-    // Heurística sênior: se o áudio que volta enquanto a IA fala é 50% maior que o ruído base
-    // OU se a energia absoluta for alta (>150), assumimos que há eco de alto-falante.
-    if (avgEcho > (this.noiseFloor * 1.5) + 100) {
+    
+    // Heurística sênior v5: Ultra-conservadora.
+    // Para ser viva-voz, o eco deve ser:
+    // 1. Pelo menos 10x maior que o ruído de fundo (Noise Floor)
+    // 2. Acima de um piso absoluto de 4000 (Apenas caixas de som reais atingem isso no mic)
+    const isLikelyEcho = avgEcho > (this.noiseFloor * 10.0) && avgEcho > 4000;
+
+    console.log(`[DEBUG ENERGY] AvgEcho: ${avgEcho.toFixed(0)} | NoiseFloor: ${this.noiseFloor.toFixed(0)} | Ratio: ${(avgEcho / (this.noiseFloor || 1)).toFixed(1)}x`);
+
+    if (isLikelyEcho) {
       return 'viva_voz';
     }
     return 'fone_ouvido';
