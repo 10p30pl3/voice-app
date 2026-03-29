@@ -1,5 +1,12 @@
 require('dotenv').config({ override: true });
 
+// OVERRIDE GLOBAL DE LOGS PARA INCLUIR HH:MM:SS
+const originalLog = console.log;
+const originalError = console.error;
+const getTS = () => new Date().toLocaleTimeString('pt-BR', { hour12: false });
+console.log = (...args) => originalLog(`[${getTS()}]`, ...args);
+console.error = (...args) => originalError(`[${getTS()}]`, ...args);
+
 const Srf = require('drachtio-srf');
 const Mrf = require('drachtio-fsmrf');
 
@@ -133,6 +140,11 @@ class OpenAIS2SBridge {
 
     console.log(`[${this.callId}] iniciando openai_s2s (formato string)...`);
 
+    // ATIVAÇÃO GLOBAL DE AEC (Echo Cancellation) e ANS (Noise Suppression) NATIVO NO FREESWITCH
+    // Ativado para TODAS as chamadas conforme solicitado (v9.7)
+    this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => {});
+    this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => {});
+
     let response = await this.endpoint.api(connectCmd);
     console.log(`[${this.callId}] resposta connect:`, response?.body || response);
 
@@ -254,7 +266,7 @@ class OpenAIS2SBridge {
         this.thresholdTimer = setInterval(async () => {
           
           // 1. Auto-Calibração / Detecção de Dispositivo (Roda apenas uma vez)
-          if (!calibrated && this.energyManager.samplesCount > 100) {
+          if (!calibrated && this.energyManager.samplesCount > 10) {
             
             // Verificamos se há um override manual no .env
             const override = process.env.DEVICE_MODE;
@@ -268,18 +280,11 @@ class OpenAIS2SBridge {
 
             calibrated = true;
             const profile = this.energyManager.getClassification();
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Calibração de 1º Passo concluída.`);
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Dispositivo: ${this.deviceMode} | Ambiente: ${profile}`);
-
-            // ATIVAÇÃO DE AEC (Echo Cancellation) e ANS (Noise Suppression) NATIVO NO FREESWITCH SOMENTE PARA VIVA-VOZ
-            if (this.deviceMode === 'viva_voz') {
-              console.log(`[${this.callId}] [VIVA-VOZ] Ativando AEC e ANS nativo do FreeSWITCH...`);
-              this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => {});
-              this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => {});
-            } else {
-              console.log(`[${this.callId}] [FONE-OUVIDO] Mantendo AEC desativado para máxima fidelidade sonora.`);
-              this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
-            }
+            console.log(`[${this.callId}] __________________________________________________`);
+            console.log(`[${this.callId}] [🚨 AUTO-DETECÇÃO] DISPOSITIVO: ${this.deviceMode.toUpperCase()}`);
+            console.log(`[${this.callId}] [🚨 AUTO-DETECÇÃO] AMBIENTE: ${profile} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
+            console.log(`[${this.callId}] --------------------------------------------------`);
+            console.log(`[${this.callId}] [🚀 GLOBAL] AEC e ANS já ativos no FreeSWITCH por padrão.`);
           }
 
           // 2. Classificação Ambiental (Limitada a 2x / 5s conforme solicitado)
@@ -386,39 +391,19 @@ class OpenAIS2SBridge {
           console.log(`[${this.callId}] [BARGE-IN NÍVEL 4] Fala detectada! Interrompendo agente...`);
           this.lastBargeInTime = Date.now();
           
-          // 1. Cancela na OpenAI (Comando lógico)
+          // 1. Interrupção Lógica (OpenAI)
           const cancelJson = '{"type":"response.cancel"}';
-          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${cancelJson}`).then(r => {
-             console.log(`[${this.callId}] Resposta cancel: ${r?.body?.trim()}`);
-          }).catch(() => {});
+          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${cancelJson}`).catch(() => {});
+
+          // 2. Interrupção Física (FreeSWITCH) - Limpa o áudio que já está no buffer de saída
+          this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
           
-          // 2. Limpa buffers (Comandos lógicos na OpenAI)
-          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event {"type":"input_audio_buffer.clear"}`).catch(() => {});
-          
-          // 3. Reseta estado após o silêncio lógico ser processado (800ms)
+          // 3. Reseta estado lógico da fala (usado pelo Echo Shield)
           setTimeout(() => {
             this.isAgentTalking = false;
           }, 800);
         }
 
-        // NÍVEL 6: Análise Semântica de Falsos Positivos
-        if (body.type === 'conversation.item.input_audio_transcription.completed' && body.transcript) {
-          const text = body.transcript.trim().toLowerCase();
-          const timeSinceBargeIn = Date.now() - this.lastBargeInTime;
-          
-          // Se houve uma interrupção recente (< 5s) e o texto é "lixo" (muito curto ou sem nexo)
-          // Isso indica que foi um barulho da TV que disparou o VAD.
-          if (timeSinceBargeIn < 5000) {
-            const validShortWords = ['sim', 'não', 'nao', 'oi', 'ok', 'vou', 'uma', 'já', 'ja', 'tá', 'ta', 'um', 'é', 'não'];
-            const isJunk = text.length < 2 || (text.length < 4 && !validShortWords.includes(text));
-            if (isJunk) {
-              this.hardeningFactor = Math.min(0.2, this.hardeningFactor + 0.05);
-              this.isHardeningLocked = true; // TRAVA DEFINITIVA EM 0.98
-              console.log(`[${this.callId}] [🚨 CRITICAL HARDENING L6] Falso Positivo detectado ("${text}").`);
-              console.log(`[${this.callId}] [🚨 CRITICAL HARDENING L6] TRAVA VAD ATIVA: 0.98 pelo resto da chamada.`);
-            }
-          }
-        }
       } catch (e) { }
     }
   }
