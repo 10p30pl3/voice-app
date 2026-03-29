@@ -260,104 +260,53 @@ class OpenAIS2SBridge {
           }
         });
 
-        let calibrated = false;
-
-        // Loop de auto-calibração: roda a cada 2.5s para fechar um diagnóstico em 5s
+        // [ESTRATÉGIA v11.0]: Calibração Ordenada em 2 Fases (2.5s cada)
         this.thresholdTimer = setInterval(async () => {
-          
-          // 1. Auto-Calibração / Detecção de Dispositivo (Roda apenas uma vez)
-          if (!calibrated && this.energyManager.samplesCount > 10) {
-            
-            // Verificamos se há um override manual no .env
-            const override = process.env.DEVICE_MODE;
-            if (override === 'fone_ouvido' || override === 'viva_voz') {
-              this.deviceMode = override;
-              console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Usando OVERRIDE manual (.env): ${this.deviceMode}`);
-            } else {
-              if (this.isAgentTalking) return; 
-              this.deviceMode = this.energyManager.detectDeviceMode();
-            }
+          this.calibrationTicks++;
 
-            calibrated = true;
-            const profile = this.energyManager.getClassification();
-            console.log(`[${this.callId}] __________________________________________________`);
-            console.log(`[${this.callId}] [🚨 AUTO-DETECÇÃO] DISPOSITIVO: ${this.deviceMode.toUpperCase()}`);
-            console.log(`[${this.callId}] [🚨 AUTO-DETECÇÃO] AMBIENTE: ${profile} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
-            console.log(`[${this.callId}] --------------------------------------------------`);
-            console.log(`[${this.callId}] [🚀 GLOBAL] AEC e ANS já ativos no FreeSWITCH por padrão.`);
+          // WATCHDOG DE CONECTIVIDADE (v11.0): Se não recebemos nada, avisamos o usuário
+          if (this.energyManager.samplesCount === 0) {
+            console.warn(`[${this.callId}] [⚠️ WARNING] Zero áudio recebido via audio_fork! Verifique conectividade/firewall.`);
           }
 
-          // 2. Classificação Ambiental (Limitada a 2x / 5s conforme solicitado)
-          if (this.calibrationTicks < 2) {
-            this.calibrationTicks++;
+          // FASE 1 (2.5s): IDENTIFICAÇÃO DO DISPOSITIVO
+          if (this.calibrationTicks === 1) {
+            this.deviceMode = this.energyManager.detectDeviceMode();
+            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo 1/2: Dispositivo: ${this.deviceMode.toUpperCase()}`);
+            
+            // Se for fone de ouvido, podemos desligar o AEC para economizar CPU e evitar distorção
+            if (this.deviceMode === 'fone_ouvido') {
+              console.log(`[${this.callId}] Desativando AEC (Modo Fone detectado)`);
+              this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+            }
+          }
+
+          // FASE 2 (5.0s): MEDIÇÃO DO NÍVEL DE RUÍDO
+          if (this.calibrationTicks === 2) {
             const profile = this.energyManager.getClassification();
             this.currentProfile = profile;
-            const nfValue = this.energyManager.noiseFloor.toFixed(0);
+            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo 2/2: Nível de Ruído: ${profile.toUpperCase()} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
             
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo ${this.calibrationTicks}/2: Ambiente: ${profile} (NF: ${nfValue})`);
+            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Janela de 5s concluída. Perfil VAD travado.`);
+            clearInterval(this.thresholdTimer);
 
-            if (this.calibrationTicks === 2) {
-              console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Janela de 5s concluída. Perfil VAD travado definitivamente.`);
-              clearInterval(this.thresholdTimer);
-              const finalConfig = this.profiles[this.currentProfile][this.deviceMode.includes('fone') ? 'fone' : 'viva'];
-              this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${JSON.stringify({
-                type: 'session.update',
-                session: {
-                  turn_detection: {
-                    type: 'server_vad',
-                    threshold: finalConfig.base,
-                    prefix_padding_ms: finalConfig.prefix,
-                    silence_duration_ms: finalConfig.silence
-                  }
-                }
-              })}`).catch(() => {});
-            }
-          }
-          
-          const profileConfig = this.profiles[this.currentProfile][this.deviceMode.includes('fone') ? 'fone' : 'viva'];
-          
-          // Aplicamos a base do perfil + o fator de endurecimento por erros passados (Nível 6)
-          let suggested = profileConfig.base + this.hardeningFactor;
-          
-          // Nível 6.1: Se a trava de hardening foi ativada por erro prévio, força 0.98
-          if (this.isHardeningLocked) {
-            suggested = 0.98;
-          }
-          
-          const isVivaVoz = this.deviceMode.includes('viva');
-          
-          // 3. Aplica o "Echo Shield" apenas se o agente estiver falando E for Viva-voz
-          if (this.isAgentTalking && isVivaVoz) {
-            suggested = Math.min(0.98, suggested + profileConfig.boost);
-          }
-
-          if (Math.abs(suggested - this.currentThreshold) > 0.05) {
-            const modeTag = this.isAgentTalking && isVivaVoz ? '(MODO ECO ATIVO)' : `(${this.currentProfile})`;
-            console.log(`[${this.callId}] Ajuste VAD: ${this.currentThreshold.toFixed(2)} -> ${suggested.toFixed(2)} ${modeTag} NF:${this.energyManager.noiseFloor.toFixed(0)}`);
-            this.currentThreshold = suggested;
-            
-            const adaptiveUpdate = {
+            // FINALIZAÇÃO: Envia o update definitivo para a OpenAI
+            const finalConfig = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
+            const sessionUpdate = {
               type: 'session.update',
-              session: { 
-                turn_detection: { 
-                  type: 'server_vad', 
-                  threshold: suggested,
-                  prefix_padding_ms: profileConfig.prefix,
-                  silence_duration_ms: profileConfig.silence
-                } 
+              session: {
+                turn_detection: {
+                  type: 'server_vad',
+                  threshold: finalConfig.base,
+                  prefix_padding_ms: finalConfig.prefix,
+                  silence_duration_ms: finalConfig.silence
+                }
               }
             };
-            // Tentativa A: client.event sem aspas e sem espaços
-            const updateJson = JSON.stringify(adaptiveUpdate).replace(/\s/g, '');
-            this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${updateJson}`).then(r => {
-              if (r?.body?.includes('-ERR')) {
-                // Tentativa B: session.update direto como subcomando
-                console.log(`[${this.callId}] client.event falhou, tentando session.update direto...`);
-                this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} session.update ${updateJson}`).catch(() => {});
-              }
-            }).catch(() => {});
+            const updateJson = JSON.stringify(sessionUpdate).replace(/\s/g, '');
+            this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${updateJson}`).catch(() => {});
           }
-        }, 5000); 
+        }, 2500); 
 
       } catch (err) {
         console.error(`[${this.callId}] Erro ao iniciar captura de áudio (Nível 3):`, err.message);

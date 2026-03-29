@@ -52,9 +52,12 @@ class WsMediaBridge {
         });
       });
 
+      const fixedPort = parseInt(process.env.AUDIO_FORK_WS_PORT || '0', 10);
+      
       await new Promise((resolve) => {
-        this.server.listen(0, '0.0.0.0', () => {
-          this.port = this.server.address().port; // Pega porta aleatória disponível
+        this.server.listen(fixedPort, '0.0.0.0', () => {
+          this.port = this.server.address().port; 
+          console.log(`[WsMediaBridge] Servidor ouvindo em 0.0.0.0:${this.port}`);
           resolve();
         });
       });

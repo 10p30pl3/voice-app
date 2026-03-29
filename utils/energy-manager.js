@@ -20,32 +20,40 @@ class EnergyManager {
    * @returns {number} Energy level (0 to 32768)
    */
   calculateEnergy(buffer, isAgentTalking = false) {
-    if (!buffer || buffer.length === 0) return 0;
+    if (!buffer || buffer.length < 2) return 0;
     
-    this.samplesCount++;
+    try {
+      this.samplesCount++;
 
-    // Converte Buffer para Int16Array (PCM16 Little Endian)
-    const pcm16 = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2);
-    let sumSquares = 0;
-    
-    for (let i = 0; i < pcm16.length; i++) {
-        sumSquares += pcm16[i] * pcm16[i];
-    }
-    
-    const rms = Math.sqrt(sumSquares / pcm16.length);
-    
-    // 1. Se o agente está falando, acumulamos para detectar Eco (Modo Viva-voz)
-    if (isAgentTalking) {
-      this.echoEnergySum += rms;
-      this.echoSamplesCount++;
-    } 
-    // 2. Se o agente está em silêncio, refinamos o Piso de Ruído (Noise Floor)
-    // Aumentado para 10000 para capturar ambientes de TV alta que antes eram ignorados.
-    else if (rms < 10000) { 
+      // BUG SENIOR FIX: Node.js Buffers são 'pooled'. Se o offset não for múltiplo de 2,
+      // o Int16Array estoura um RangeError. Precisamos garantir alinhamento (v11.0).
+      let pcm16;
+      if (buffer.byteOffset % 2 === 0) {
+        pcm16 = new Int16Array(buffer.buffer, buffer.byteOffset, Math.floor(buffer.length / 2));
+      } else {
+        const aligned = Buffer.allocUnsafe(buffer.length);
+        buffer.copy(aligned);
+        pcm16 = new Int16Array(aligned.buffer, aligned.byteOffset, Math.floor(aligned.length / 2));
+      }
+
+      let sumSquares = 0;
+      for (let i = 0; i < pcm16.length; i++) {
+          sumSquares += pcm16[i] * pcm16[i];
+      }
+      
+      const rms = Math.sqrt(sumSquares / pcm16.length) || 0;
+      
+      if (isAgentTalking) {
+        this.echoEnergySum += rms;
+        this.echoSamplesCount++;
+      } else if (rms < 10000) { 
         this.noiseFloor = (this.alpha * rms) + ((1 - this.alpha) * this.noiseFloor);
+      }
+      
+      return rms;
+    } catch (err) {
+      return 0;
     }
-    
-    return rms;
   }
 
   /**
@@ -53,14 +61,12 @@ class EnergyManager {
    * @returns {string} viva_voz | fone_ouvido
    */
   detectDeviceMode() {
-    if (this.echoSamplesCount < 10) return 'fone_ouvido'; // Sem dados suficientes
+    // BUG SENIOR FIX: Se não temos dados (NF: 0), o mais seguro é assumir VIVA-VOZ (v11.0)
+    if (this.echoSamplesCount < 10) return 'viva_voz'; 
     
     const avgEcho = this.echoEnergySum / this.echoSamplesCount;
     
     // Heurística sênior v5: Ultra-conservadora.
-    // Para ser viva-voz, o eco deve ser:
-    // 1. Pelo menos 10x maior que o ruído de fundo (Noise Floor)
-    // 2. Acima de um piso absoluto de 4000 (Apenas caixas de som reais atingem isso no mic)
     const isLikelyEcho = avgEcho > (this.noiseFloor * 10.0) && avgEcho > 4000;
 
     console.log(`[DEBUG ENERGY] AvgEcho: ${avgEcho.toFixed(0)} | NoiseFloor: ${this.noiseFloor.toFixed(0)} | Ratio: ${(avgEcho / (this.noiseFloor || 1)).toFixed(1)}x`);
