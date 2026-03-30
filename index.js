@@ -119,11 +119,12 @@ class OpenAIS2SBridge {
       throw new Error('nao consegui descobrir o uuid do canal para uuid_openai_s2s');
     }
 
-    // [v11.2] PRE-CLEANUP: Tenta parar sessões anteriores que possam estar zumbis
-    console.log(`[${this.callId}] [PRE-CLEANUP] Resetando audio_fork/openai...`);
+    // [v11.5] FORCED RESET: Limpa buffers e para qualquer processo anterior
+    console.log(`[${this.callId}] [RESET] Limpando buffers e parando zumbis...`);
+    this.endpoint.api(`uuid_flush ${this.channelUuid}`).catch(() => {});
     this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop`).catch(() => {});
     this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} session.delete`).catch(() => {});
-    await wait(200);
+    await wait(300);
 
     // ==== NÍVEL 3 E 4 (BARGE-IN PROATIVO E ESTADO) ====
     if (this.endpoint.conn) {
@@ -235,7 +236,8 @@ class OpenAIS2SBridge {
 
     // ==== NÍVEL 3 + THRESHOLD DINÂMICO ====
     if (bargeinLevel >= 3) {
-      console.log(`[${this.callId}] Iniciando captura de áudio para Threshold Dinâmico...`);
+      console.log(`[${this.callId}] Aguardando 500ms antes de iniciar captura de áudio...`);
+      await wait(500);
       try {
         await this.mediaBridge.start({
           callId: this.callId,
@@ -244,8 +246,6 @@ class OpenAIS2SBridge {
             const buffer = Buffer.from(base64, 'base64');
             
             // NÍVEL 5.2: Calibração Limpa (Greeting-Only)
-            // Só acumulamos energia de Eco durante as primeiras 300 amostras (aprox 6s)
-            // Isso evita que a sua voz no meio da chamada seja confundida com eco de viva-voz.
             let isEcoSample = false;
             if (this.calibrationActive && this.isAgentTalking) {
               isEcoSample = true;
@@ -261,51 +261,53 @@ class OpenAIS2SBridge {
 
         // [ESTRATÉGIA v11.2]: Calibração Ordenada (0-5s) + Echo Shield Dinâmico (Restaurado)
         this.thresholdTimer = setInterval(async () => {
-          this.calibrationTicks++;
+          try { // GUARD v11.4: Evita que erros async derrubem o processo
+            this.calibrationTicks++;
 
-          // 1. WATCHDOG DE CONECTIVIDADE
-          if (this.energyManager.samplesCount === 0) {
-            console.warn(`[${this.callId}] [⚠️ WARNING] Zero áudio via audio_fork! Confirme firewall/rede.`);
-          }
+            // 1. WATCHDOG DE CONECTIVIDADE
+            if (this.energyManager.samplesCount === 0) {
+              console.warn(`[${this.callId}] [⚠️ WARNING] Zero áudio via audio_fork! Confirme firewall/rede.`);
+            }
 
-          // 2. FASE DE CALIBRAÇÃO (0-5s)
-          if (this.calibrationTicks <= 2) {
-            // FASE 1 (2.5s): IDENTIFICAÇÃO DO HARDWARE
-            if (this.calibrationTicks === 1) {
-              const echoSamples = this.energyManager.echoSamplesCount;
-              this.deviceMode = this.energyManager.detectDeviceMode(this.callId);
-              console.log(`[${this.callId}] ┌─────────────────────────────────────────────`);
-              console.log(`[${this.callId}] │ 📱 FASE 1: DISPOSITIVO = ${this.deviceMode.toUpperCase()}`);
-              console.log(`[${this.callId}] │ Amostras de eco capturadas: ${echoSamples}`);
-              console.log(`[${this.callId}] └─────────────────────────────────────────────`);
-              
-              if (this.deviceMode === 'fone_ouvido') {
-                console.log(`[${this.callId}] [FASE 1] AEC desativado (fone).`);
-                this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+            // 2. FASE DE CALIBRAÇÃO (0-5s)
+            if (this.calibrationTicks <= 2) {
+              // FASE 1 (2.5s): IDENTIFICAÇÃO DO HARDWARE
+              if (this.calibrationTicks === 1) {
+                const echoSamples = this.energyManager.echoSamplesCount;
+                this.deviceMode = this.energyManager.detectDeviceMode(this.callId);
+                console.log(`[${this.callId}] ┌─────────────────────────────────────────────`);
+                console.log(`[${this.callId}] │ 📱 FASE 1: DISPOSITIVO = ${this.deviceMode.toUpperCase()}`);
+                console.log(`[${this.callId}] │ Amostras de eco capturadas: ${echoSamples}`);
+                console.log(`[${this.callId}] └─────────────────────────────────────────────`);
+                
+                if (this.deviceMode === 'fone_ouvido') {
+                  console.log(`[${this.callId}] [FASE 1] AEC desativado (fone).`);
+                  this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+                }
+              }
+
+              // FASE 2 (5.0s): MEDIÇÃO DO AMBIENTE + LOCK
+              if (this.calibrationTicks === 2) {
+                const profile = this.energyManager.getClassification();
+                this.currentProfile = profile;
+                console.log(`[${this.callId}] ┌─────────────────────────────────────────────`);
+                console.log(`[${this.callId}] │ 🏭 FASE 2: AMBIENTE = ${profile} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
+                console.log(`[${this.callId}] └─────────────────────────────────────────────`);
+                console.log(`[${this.callId}] 🔒 CALIBRAÇÃO CONCLUÍDA. Ativando Escudo Dinâmico...`);
+                
+                clearInterval(this.thresholdTimer);
+                this.startDynamicShield();
               }
             }
-
-            // FASE 2 (5.0s): MEDIÇÃO DO AMBIENTE + LOCK
-            if (this.calibrationTicks === 2) {
-              const profile = this.energyManager.getClassification();
-              this.currentProfile = profile;
-              console.log(`[${this.callId}] ┌─────────────────────────────────────────────`);
-              console.log(`[${this.callId}] │ 🏭 FASE 2: AMBIENTE = ${profile} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
-              console.log(`[${this.callId}] └─────────────────────────────────────────────`);
-              console.log(`[${this.callId}] 🔒 CALIBRAÇÃO CONCLUÍDA. Ativando Escudo Dinâmico...`);
-              
-              // Mudamos o intervalo para 500ms para um Echo Shield ultra-responsivo
-              clearInterval(this.thresholdTimer);
-              this.startDynamicShield();
-            }
+          } catch (timerErr) {
+            console.error(`[${this.callId}] Erro no timer de calibração:`, timerErr.message);
           }
-        }, 2500);
+        }, 2500); 
 
       } catch (err) {
         console.error(`[${this.callId}] Erro ao iniciar captura de áudio (Nível 3):`, err.message);
       }
     }
-
   }
 
   /**

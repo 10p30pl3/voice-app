@@ -24,8 +24,9 @@ class WsMediaBridge {
       this.server = http.createServer();
       this.wss = new WebSocket.Server({ server: this.server });
 
-      this.wss.on('connection', (ws) => {
-        console.log(`[${this.callId}] websocket de mídia conectado`);
+      this.wss.on('connection', (ws, req) => {
+        const ip = req.socket.remoteAddress;
+        console.log(`[${this.callId}] [WsMediaBridge] Conexão recebida de ${ip}`);
         this.socket = ws;
 
         ws.on('message', (raw) => {
@@ -54,10 +55,18 @@ class WsMediaBridge {
 
       const fixedPort = parseInt(process.env.AUDIO_FORK_WS_PORT || '0', 10);
       
-      await new Promise((resolve) => {
+      await new Promise((resolve, reject) => {
+        this.server.on('error', (err) => {
+          console.error(`[${this.callId}] [WsMediaBridge] Erro no servidor HTTP:`, err.message);
+          if (err.code === 'EADDRINUSE') {
+            console.error(`[${this.callId}] Porta ${fixedPort} já está ocupada!`);
+          }
+          reject(err);
+        });
+
         this.server.listen(fixedPort, '0.0.0.0', () => {
           this.port = this.server.address().port; 
-          console.log(`[WsMediaBridge] Servidor ouvindo em 0.0.0.0:${this.port}`);
+          console.log(`[${this.callId}] [WsMediaBridge] Servidor ouvindo em 0.0.0.0:${this.port}`);
           resolve();
         });
       });
@@ -101,21 +110,32 @@ class WsMediaBridge {
       console.error(`[${this.callId}] erro stop uuid_audio_fork:`, err.message || err);
     }
 
-    try { this.socket && this.socket.close(); } catch {}
-    try { this.wss && this.wss.close(); } catch {}
+    try { 
+      if (this.socket) {
+        this.socket.terminate(); 
+        this.socket = null;
+      }
+    } catch {}
+
+    try { 
+      if (this.wss) {
+        this.wss.clients.forEach(client => client.terminate());
+        this.wss.close(); 
+        this.wss = null;
+      }
+    } catch {}
     
     if (this.server) {
       await new Promise((resolve) => {
+        // Encerra forçadamente todas as conexões HTTP zumbis para liberar a porta IMEDIATAMENTE
+        this.server.closeAllConnections && this.server.closeAllConnections(); 
         this.server.close(() => {
-          console.log(`[${this.callId}] Servidor de mídia parado.`);
+          console.log(`[${this.callId}] [WsMediaBridge] Servidor de mídia parado.`);
           resolve();
         });
       });
+      this.server = null;
     }
-
-    this.socket = null;
-    this.wss = null;
-    this.server = null;
   }
 }
 
