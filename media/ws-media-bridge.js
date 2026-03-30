@@ -103,7 +103,15 @@ class WsMediaBridge {
 
     try { this.socket && this.socket.close(); } catch {}
     try { this.wss && this.wss.close(); } catch {}
-    try { this.server && this.server.close(); } catch {}
+    
+    if (this.server) {
+      await new Promise((resolve) => {
+        this.server.close(() => {
+          console.log(`[${this.callId}] Servidor de mídia parado.`);
+          resolve();
+        });
+      });
+    }
 
     this.socket = null;
     this.wss = null;

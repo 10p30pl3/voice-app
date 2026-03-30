@@ -81,9 +81,7 @@ class OpenAIS2SBridge {
     this.handleEslEvent = this.handleEslEvent.bind(this);
     
     // NÍVEL 5: Perfis por Ambiente e Dispositivo (viva_voz vs fone)
-    this.deviceMode = 'viva_voz'; // Padrão inicial, será calibrado
-    this.hardeningFactor = 0;    // Nível 6: "Escudo" contra falsos positivos semânticos
-    this.isHardeningLocked = false; // Nível 6.1: Trava definitiva em 0.98 após erro
+    this.deviceMode = 'viva_voz'; // Padrão pessimista (assume viva-voz até Fase 1 confirmar)
     this.lastBargeInTime = 0;
     
     // NÍVEL 5.2: Controle de Calibração Limpa
@@ -121,6 +119,12 @@ class OpenAIS2SBridge {
       throw new Error('nao consegui descobrir o uuid do canal para uuid_openai_s2s');
     }
 
+    // [v11.2] PRE-CLEANUP: Tenta parar sessões anteriores que possam estar zumbis
+    console.log(`[${this.callId}] [PRE-CLEANUP] Resetando audio_fork/openai...`);
+    this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop`).catch(() => {});
+    this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} session.delete`).catch(() => {});
+    await wait(200);
+
     // ==== NÍVEL 3 E 4 (BARGE-IN PROATIVO E ESTADO) ====
     if (this.endpoint.conn) {
       try {
@@ -138,19 +142,20 @@ class OpenAIS2SBridge {
       `uuid_openai_s2s ${this.channelUuid} session.create ` +
       `api.openai.com /v1/realtime?model=${OPENAI_REALTIME_MODEL} bearer ${OPENAI_API_KEY}`;
 
-    console.log(`[${this.callId}] iniciando openai_s2s (formato string)...`);
+    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
+    console.log(`[${this.callId}] 📞 FASE 0: CONEXÃO - Iniciando sessão OpenAI S2S...`);
+    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
 
-    // ATIVAÇÃO GLOBAL DE AEC (Echo Cancellation) e ANS (Noise Suppression) NATIVO NO FREESWITCH
-    // Ativado para TODAS as chamadas conforme solicitado (v9.7)
+    // AEC e ANS ativados por padrão. Fase 1 pode desligar se detectar fone.
     this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => {});
     this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => {});
 
     let response = await this.endpoint.api(connectCmd);
-    console.log(`[${this.callId}] resposta connect:`, response?.body || response);
+    console.log(`[${this.callId}] [FASE 0] resposta connect:`, response?.body || response);
 
     // Se falhar, tentamos o formato JSON como fallback
     if (response?.body?.includes('-ERR') || response?.body === '-ERR no reply') {
-      console.log(`[${this.callId}] formato string falhou, tentando formato JSON...`);
+      console.log(`[${this.callId}] [FASE 0] formato string falhou, tentando formato JSON...`);
       const sessionConfig = {
         type: 'session.create',
         model: OPENAI_REALTIME_MODEL || 'gpt-realtime-mini',
@@ -158,16 +163,10 @@ class OpenAIS2SBridge {
       };
       const jsonCmd = `uuid_openai_s2s ${this.channelUuid} session.create '${JSON.stringify(sessionConfig)}'`;
       response = await this.endpoint.api(jsonCmd);
-      console.log(`[${this.callId}] resposta connect (JSON):`, response?.body || response);
+      console.log(`[${this.callId}] [FASE 0] resposta connect (JSON):`, response?.body || response);
     }
 
-    // Aumentado para 5s para garantir que o mod_openai esteja pronto
     await wait(3000);
-
-    // DESCOBERTA: Tenta rodar um comando vazio para ver se o FreeSWITCH cospe o USAGE
-    this.endpoint.api(`uuid_openai_s2s ${this.channelUuid}`).then(r => {
-      console.log(`[${this.callId}] [DEBUG USAGE]`, r?.body || r);
-    }).catch(() => {});
 
     // Lê o Nível de Barge-in do ambiente (A autocalibração opera no Nível 5)
     const bargeinLevel = parseInt(process.env.BARGEIN_LEVEL || '5', 10);
@@ -260,60 +259,90 @@ class OpenAIS2SBridge {
           }
         });
 
-        // [ESTRATÉGIA v11.0]: Calibração Ordenada em 2 Fases (2.5s cada)
+        // [ESTRATÉGIA v11.2]: Calibração Ordenada (0-5s) + Echo Shield Dinâmico (Restaurado)
         this.thresholdTimer = setInterval(async () => {
           this.calibrationTicks++;
 
-          // WATCHDOG DE CONECTIVIDADE (v11.0): Se não recebemos nada, avisamos o usuário
+          // 1. WATCHDOG DE CONECTIVIDADE
           if (this.energyManager.samplesCount === 0) {
-            console.warn(`[${this.callId}] [⚠️ WARNING] Zero áudio recebido via audio_fork! Verifique conectividade/firewall.`);
+            console.warn(`[${this.callId}] [⚠️ WARNING] Zero áudio via audio_fork! Confirme firewall/rede.`);
           }
 
-          // FASE 1 (2.5s): IDENTIFICAÇÃO DO DISPOSITIVO
-          if (this.calibrationTicks === 1) {
-            this.deviceMode = this.energyManager.detectDeviceMode();
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo 1/2: Dispositivo: ${this.deviceMode.toUpperCase()}`);
-            
-            // Se for fone de ouvido, podemos desligar o AEC para economizar CPU e evitar distorção
-            if (this.deviceMode === 'fone_ouvido') {
-              console.log(`[${this.callId}] Desativando AEC (Modo Fone detectado)`);
-              this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+          // 2. FASE DE CALIBRAÇÃO (0-5s)
+          if (this.calibrationTicks <= 2) {
+            // FASE 1 (2.5s): IDENTIFICAÇÃO DO HARDWARE
+            if (this.calibrationTicks === 1) {
+              const echoSamples = this.energyManager.echoSamplesCount;
+              this.deviceMode = this.energyManager.detectDeviceMode(this.callId);
+              console.log(`[${this.callId}] ┌─────────────────────────────────────────────`);
+              console.log(`[${this.callId}] │ 📱 FASE 1: DISPOSITIVO = ${this.deviceMode.toUpperCase()}`);
+              console.log(`[${this.callId}] │ Amostras de eco capturadas: ${echoSamples}`);
+              console.log(`[${this.callId}] └─────────────────────────────────────────────`);
+              
+              if (this.deviceMode === 'fone_ouvido') {
+                console.log(`[${this.callId}] [FASE 1] AEC desativado (fone).`);
+                this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+              }
+            }
+
+            // FASE 2 (5.0s): MEDIÇÃO DO AMBIENTE + LOCK
+            if (this.calibrationTicks === 2) {
+              const profile = this.energyManager.getClassification();
+              this.currentProfile = profile;
+              console.log(`[${this.callId}] ┌─────────────────────────────────────────────`);
+              console.log(`[${this.callId}] │ 🏭 FASE 2: AMBIENTE = ${profile} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
+              console.log(`[${this.callId}] └─────────────────────────────────────────────`);
+              console.log(`[${this.callId}] 🔒 CALIBRAÇÃO CONCLUÍDA. Ativando Escudo Dinâmico...`);
+              
+              // Mudamos o intervalo para 500ms para um Echo Shield ultra-responsivo
+              clearInterval(this.thresholdTimer);
+              this.startDynamicShield();
             }
           }
-
-          // FASE 2 (5.0s): MEDIÇÃO DO NÍVEL DE RUÍDO
-          if (this.calibrationTicks === 2) {
-            const profile = this.energyManager.getClassification();
-            this.currentProfile = profile;
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Passo 2/2: Nível de Ruído: ${profile.toUpperCase()} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
-            
-            console.log(`[${this.callId}] [AUTO-CALIBRAÇÃO] Janela de 5s concluída. Perfil VAD travado.`);
-            clearInterval(this.thresholdTimer);
-
-            // FINALIZAÇÃO: Envia o update definitivo para a OpenAI
-            const finalConfig = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
-            const sessionUpdate = {
-              type: 'session.update',
-              session: {
-                turn_detection: {
-                  type: 'server_vad',
-                  threshold: finalConfig.base,
-                  prefix_padding_ms: finalConfig.prefix,
-                  silence_duration_ms: finalConfig.silence
-                }
-              }
-            };
-            const updateJson = JSON.stringify(sessionUpdate).replace(/\s/g, '');
-            this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${updateJson}`).catch(() => {});
-          }
-        }, 2500); 
+        }, 2500);
 
       } catch (err) {
         console.error(`[${this.callId}] Erro ao iniciar captura de áudio (Nível 3):`, err.message);
       }
     }
 
-    console.log(`[${this.callId}] sessao configurada e pronta para conversacao`);
+  }
+
+  /**
+   * ESCUDO DE ECO DINÂMICO (v11.2)
+   * Oscila o threshold da OpenAI em tempo real para ignorar o eco do viva-voz.
+   */
+  startDynamicShield() {
+    this.thresholdTimer = setInterval(() => {
+      const config = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
+      let targetThreshold = config.base;
+
+      // Se o agente está falando e é Viva-voz, aumentamos o threshold (surdez seletiva)
+      if (this.isAgentTalking && this.deviceMode === 'viva_voz') {
+        targetThreshold = Math.min(0.98, config.base + config.boost);
+      }
+
+      // Só envia update se o threshold mudou (evita flood de eventos)
+      if (Math.abs(targetThreshold - this.currentThreshold) > 0.05) {
+        this.currentThreshold = targetThreshold;
+        const modeTag = this.isAgentTalking ? '🤖 ECO-SHIELD ON' : '👤 LISTENING';
+        console.log(`[${this.callId}] [VAD] ${this.currentThreshold.toFixed(2)} ${modeTag}`);
+
+        const update = {
+          type: 'session.update',
+          session: { 
+            turn_detection: { 
+              type: 'server_vad', 
+              threshold: targetThreshold,
+              prefix_padding_ms: config.prefix,
+              silence_duration_ms: config.silence
+            } 
+          }
+        };
+        const json = JSON.stringify(update).replace(/\s/g, '');
+        this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${json}`).catch(() => {});
+      }
+    }, 500);
   }
 
   // Tratador de eventos seguro para não sujar o EventEmitter global
@@ -337,20 +366,14 @@ class OpenAIS2SBridge {
         }
 
         if (body.type === 'input_audio_buffer.speech_started') {
-          console.log(`[${this.callId}] [BARGE-IN NÍVEL 4] Fala detectada! Interrompendo agente...`);
+          console.log(`[${this.callId}] 🎤 BARGE-IN: Fala detectada! Interrompendo agente...`);
           this.lastBargeInTime = Date.now();
+          this.isAgentTalking = false; // Reset imediato, confiando nos eventos response.done/cancelled
           
           // 1. Interrupção Lógica (OpenAI)
-          const cancelJson = '{"type":"response.cancel"}';
-          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${cancelJson}`).catch(() => {});
-
-          // 2. Interrupção Física (FreeSWITCH) - Limpa o áudio que já está no buffer de saída
+          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event {"type":"response.cancel"}`).catch(() => {});
+          // 2. Interrupção Física (FreeSWITCH) - Limpa o buffer de saída
           this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
-          
-          // 3. Reseta estado lógico da fala (usado pelo Echo Shield)
-          setTimeout(() => {
-            this.isAgentTalking = false;
-          }, 800);
         }
 
       } catch (e) { }
@@ -405,10 +428,11 @@ srf.on('error', (err) => {
 });
 
 async function connectMrf() {
-  attempts += 1;
-  console.log(`tentando conectar ao FreeSWITCH via ESL (tentativa ${attempts})`);
-
-  try {
+  while (true) {
+    attempts += 1;
+    console.log(`tentando conectar ao FreeSWITCH via ESL (tentativa ${attempts})`);
+  
+    try {
       mediaserver = await withTimeout(
         mrf.connect({
           address: FREESWITCH_HOST,
@@ -417,13 +441,14 @@ async function connectMrf() {
         }),
         15000
       );
-
-    mrfReady = true;
-    console.log('conectado ao FreeSWITCH via ESL');
-  } catch (err) {
-    console.error('erro conectando ao FreeSWITCH:', err.message || err);
-    await wait(3000);
-    connectMrf();
+  
+      mrfReady = true;
+      console.log('conectado ao FreeSWITCH via ESL');
+      break; // Sucesso! Sai do loop.
+    } catch (err) {
+      console.error('erro conectando ao FreeSWITCH:', err.message || err);
+      await wait(3000);
+    }
   }
 }
 connectMrf();
