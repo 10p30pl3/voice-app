@@ -1,5 +1,5 @@
 require('dotenv').config({ override: true });
-
+// v14.0
 // OVERRIDE GLOBAL DE LOGS PARA INCLUIR HH:MM:SS
 const originalLog = console.log;
 const originalError = console.error;
@@ -23,7 +23,7 @@ const OPENAI_REALTIME_MODEL =
   process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini';
 const OPENAI_PROMPT_ID =
   process.env.OPENAI_PROMPT_ID ||
-  'pmpt_699c6d29234081909e3ce4c9ac9c32ed051663f2fadd92d8';
+  'pmpt_68b1a68ef0e8819784ef7056a79c675d088bcfde975cd0dd';
 
 const EnergyManager = require('./utils/energy-manager');
 const WsMediaBridge = require('./media/ws-media-bridge');
@@ -125,8 +125,8 @@ class OpenAIS2SBridge {
     this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} session.delete`).catch(() => { });
     await wait(200);
 
-    // AEC e ANS ativados globalmente (Hardware-level)
-    this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => { });
+    // AEC inicia desligado e ANS ativado (Hardware-level)
+    this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => { });
     this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => { });
 
     // ==== NÍVEL 3 E 4 (BARGE-IN PROATIVO E ESTADO) ====
@@ -164,15 +164,93 @@ class OpenAIS2SBridge {
       console.log(`[${this.callId}] resposta connect (JSON):`, response?.body || response);
     }
 
-    await wait(3000);
-
     // Lê o Nível de Barge-in do ambiente
     const bargeinLevel = parseInt(process.env.BARGEIN_LEVEL || '5', 10);
 
-    // Valores iniciais seguros
-    const vadThreshold = 0.45;
-    const prefixPaddingMs = 300;
-    const silenceDurationMs = 500;
+    // [v26.0] Sonar Mode: Latência Zero para Calibração
+    let vadThreshold = 0.45;
+    let prefixPaddingMs = 300;
+    let silenceDurationMs = 500;
+
+    this.isToneProbe = false;
+
+    if (bargeinLevel >= 3) {
+      console.log(`[${this.callId}] 📡 SONAR MODE: Iniciando captura acústica instantânea...`);
+      this.energyManager.reset(); // [v32.0] Força limpar acumuladores evitando leak
+      try {
+        await this.mediaBridge.start({
+          callId: this.callId,
+          endpoint: this.endpoint,
+          onAudio: (base64) => {
+            const buffer = Buffer.from(base64, 'base64');
+
+            let isEcoSample = false;
+            if (this.calibrationActive && (this.isToneProbe || this.isAgentTalking)) {
+              isEcoSample = true;
+              this.calibrationSamplesRecv++;
+              if (this.calibrationSamplesRecv > 500) {
+                this.calibrationActive = false;
+              }
+            }
+
+            this.energyManager.calculateEnergy(buffer, isEcoSample);
+          }
+        });
+      } catch (err) {
+        console.error(`[${this.callId}] Erro ao iniciar captura Sonar:`, err.message);
+      }
+
+      // [v28.0] Desativa AEC temporariamente para o 'Sonar' ouvir o eco real (RAW)
+      this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => { });
+
+      // [v29.0] Mais tempo de silêncio para estabilizar o audio_fork na rede
+      await wait(700);
+
+      // Dispara o 'Sonar' de 700ms (Volume máximo v=0) e marca como Eco
+      this.isToneProbe = true;
+      this.endpoint.play('tone_stream://v=0;%(700,0,425)').catch(() => { });
+      const startSamples = this.energyManager.echoSamplesCount;
+      await wait(700);
+      this.isToneProbe = false;
+      const collected = this.energyManager.echoSamplesCount - startSamples;
+
+      if (collected === 0) {
+        console.warn(`[${this.callId}] [⚠️ WARNING] Zero áudio via audio_fork durante Sonar! (A conexão pode estar lenta)`);
+      } else {
+        console.log(`[${this.callId}] [SONAR-DEBUG] Capturadas ${collected} amostras durante o bíp.`);
+      }
+
+      // Executa a calibração com latência zero
+      this.deviceMode = this.energyManager.detectDeviceMode(this.callId);
+
+      // [v28.0] Ajuste Inteligente de AEC pós-detecção
+      if (this.deviceMode === 'viva_voz') {
+        console.log(`[${this.callId}] 🛡️ Ativando AEC para proteção de Viva-voz.`);
+        this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => { });
+      } else {
+        console.log(`[${this.callId}] 🎧 Mantendo AEC desligado para máxima fluidez no Fone.`);
+        this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => { });
+      }
+
+      const profile = this.energyManager.getClassification();
+      this.currentProfile = profile;
+      const config = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
+
+      vadThreshold = config.base;
+      prefixPaddingMs = config.prefix;
+      silenceDurationMs = config.silence;
+
+      console.log(`[${this.callId}] ┌── 🎯 SONAR LOCK (Latência Zero) ────────────`);
+      console.log(`[${this.callId}] │ 📱 DISPOSITIVO: ${this.deviceMode.toUpperCase()}`);
+      console.log(`[${this.callId}] │ 🏭 AMBIENTE: ${profile} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
+      console.log(`[${this.callId}] │ 🔒 VAD LOCK: ${config.base} (Pref: ${config.prefix}ms | Sil: ${config.silence}ms)`);
+      console.log(`[${this.callId}] └─────────────────────────────────────────────`);
+
+    } else {
+      // Caso barge-in desativado, apenas toca o tom e espera
+      this.endpoint.play('tone_stream://v=-13;%(1000,0,425)').catch(() => { });
+      await wait(1000);
+    }
 
     console.log(`[${this.callId}] Configurando Sessao API. Nível: ${bargeinLevel}`);
 
@@ -213,84 +291,10 @@ class OpenAIS2SBridge {
     const triggerCmd = `uuid_openai_s2s ${this.channelUuid} client.event '${JSON.stringify(responseCreate)}'`;
     await this.endpoint.api(triggerCmd);
 
-    // ==== NÍVEL 3 + AUTO-CALIBRAÇÃO v11.0 ====
-    if (bargeinLevel >= 3) {
-      console.log(`[${this.callId}] Aguardando 500ms antes da captura...`);
-      await wait(500);
-      try {
-        await this.mediaBridge.start({
-          callId: this.callId,
-          endpoint: this.endpoint,
-          onAudio: (base64) => {
-            const buffer = Buffer.from(base64, 'base64');
-
-            let isEcoSample = false;
-            if (this.calibrationActive && this.isAgentTalking) {
-              isEcoSample = true;
-              this.calibrationSamplesRecv++;
-              if (this.calibrationSamplesRecv > 300) {
-                this.calibrationActive = false;
-              }
-            }
-
-            this.energyManager.calculateEnergy(buffer, isEcoSample);
-          }
-        });
-
-        // Loop de Calibração (5s)
-        this.thresholdTimer = setInterval(async () => {
-          try {
-            this.calibrationTicks++;
-
-            if (this.energyManager.samplesCount === 0) {
-              console.warn(`[${this.callId}] [⚠️ WARNING] Zero áudio via audio_fork!`);
-            }
-
-            // FASE 1 (2.5s): HARDWARE
-            if (this.calibrationTicks === 1) {
-              this.deviceMode = this.energyManager.detectDeviceMode(this.callId);
-              console.log(`[${this.callId}] [FASE 1] Dispositivo: ${this.deviceMode.toUpperCase()}`);
-
-              if (this.deviceMode === 'fone_ouvido') {
-                this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => { });
-              }
-            }
-
-            // FASE 2 (5.0s): RUÍDO AMBIENTE + LOCK
-            if (this.calibrationTicks === 2) {
-              const profile = this.energyManager.getClassification();
-              this.currentProfile = profile;
-              const config = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
-
-              console.log(`[${this.callId}] [FASE 2] Ambiente: ${profile} (NF: ${this.energyManager.noiseFloor.toFixed(0)})`);
-              console.log(`[${this.callId}] 🔒 CALIBRAÇÃO CONCLUÍDA. VAD travado.`);
-
-              const finalUpdate = {
-                type: 'session.update',
-                session: {
-                  turn_detection: {
-                    type: 'server_vad',
-                    threshold: config.base,
-                    prefix_padding_ms: config.prefix,
-                    silence_duration_ms: config.silence
-                  }
-                }
-              };
-              const json = JSON.stringify(finalUpdate).replace(/\s/g, '');
-              this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event ${json}`).catch(() => { });
-
-              clearInterval(this.thresholdTimer);
-              this.thresholdTimer = null;
-            }
-          } catch (timerErr) {
-            console.error(`[${this.callId}] Erro no timer:`, timerErr.message);
-          }
-        }, 2500);
-
-      } catch (err) {
-        console.error(`[${this.callId}] Erro ao iniciar captura:`, err.message);
-      }
-    }
+    // [v17.4] Aqui a IA já recebeu as configurações finais. Ocorreu zero latência de calibração extra.
+    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
+    console.log(`[${this.callId}] 🟢 START LISTENING - IA Configurada e Pronta!`);
+    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
   }
 
   // Tratador de eventos seguro para não sujar o EventEmitter global

@@ -53,7 +53,8 @@ class WsMediaBridge {
         });
       });
 
-      const fixedPort = parseInt(process.env.AUDIO_FORK_WS_PORT || '0', 10);
+      // v16.0: Sincronizado para usar apenas o que está no .env (MEDIA_WS_PORT)
+      const fixedPort = parseInt(process.env.MEDIA_WS_PORT || '0', 10);
       
       await new Promise((resolve, reject) => {
         this.server.on('error', (err) => {
