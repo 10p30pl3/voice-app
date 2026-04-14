@@ -1,5 +1,5 @@
 require('dotenv').config({ override: true });
-// v14.0 macmini
+// v14.0 macmini 
 // OVERRIDE GLOBAL DE LOGS PARA INCLUIR HH:MM:SS
 const originalLog = console.log;
 const originalError = console.error;
