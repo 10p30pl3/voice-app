@@ -67,6 +67,61 @@ function getChannelUuid(endpoint) {
   );
 }
 
+const WebSocket = require('ws');
+const fs = require('fs');
+const path = require('path');
+
+// Helper para criar cabeçalho WAV para áudio L16 (8kHz, Mono, 16-bit)
+function createWavHeader(dataLength) {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataLength, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // Mono
+  header.writeUInt32LE(8000, 24); // Sample Rate
+  header.writeUInt32LE(16000, 28); // Byte Rate
+  header.writeUInt16LE(2, 32); // Block Align
+  header.writeUInt16LE(16, 34); // Bits per sample
+  header.write('data', 36);
+  header.writeUInt32LE(dataLength, 40);
+  return header;
+}
+
+// Helper de upsampling PCM16: 8kHz para 24kHz (Repetição Simples 3x)
+function upsample8to24(buffer8k) {
+  const samplesCount = buffer8k.length / 2;
+  const buffer24k = Buffer.alloc(buffer8k.length * 3);
+  for (let i = 0; i < samplesCount; i++) {
+    const val = buffer8k.readInt16LE(i * 2);
+    const pos = i * 6;
+    buffer24k.writeInt16LE(val, pos);
+    buffer24k.writeInt16LE(val, pos + 2);
+    buffer24k.writeInt16LE(val, pos + 4);
+  }
+  return buffer24k;
+}
+
+// Helper de downsampling PCM16: 24kHz para 8kHz com filtro Anti-Aliasing (Média Móvel)
+function downsample24to8(buffer24k) {
+  const samplesCount = buffer24k.length / 2;
+  const targetSamplesCount = Math.floor(samplesCount / 3);
+  const buffer8k = Buffer.alloc(targetSamplesCount * 2);
+  for (let i = 0; i < targetSamplesCount; i++) {
+    const offset = i * 6;
+    const s1 = buffer24k.readInt16LE(offset);
+    const s2 = buffer24k.readInt16LE(offset + 2);
+    const s3 = buffer24k.readInt16LE(offset + 4);
+    
+    // Média dos 3 samples para evitar distorção metálica (aliasing)
+    const avg = Math.round((s1 + s2 + s3) / 3);
+    buffer8k.writeInt16LE(avg, i * 2);
+  }
+  return buffer8k;
+}
+
 class OpenAIS2SBridge {
   constructor() {
     this.endpoint = null;
@@ -78,7 +133,6 @@ class OpenAIS2SBridge {
     this.baseThreshold = 0.45; // Valor seguro inicial (SILENCE + viva_voz)
     this.currentThreshold = this.baseThreshold;
     this.isAgentTalking = false;
-    this.handleEslEvent = this.handleEslEvent.bind(this);
 
     // NÍVEL 5: Perfis por Ambiente e Dispositivo (viva_voz vs fone)
     this.deviceMode = 'viva_voz'; // Padrão pessimista (assume viva-voz até Fase 1 confirmar)
@@ -108,6 +162,33 @@ class OpenAIS2SBridge {
       }
     };
     this.currentProfile = 'SILENCE';
+
+    this.openaiSocket = null;
+    this.openaiReady = false;
+    this.audioPlaybackBuffer = Buffer.alloc(0);
+    this.activeAudioFile = null;
+    this.handleEslEvent = this.handleEslEvent.bind(this);
+  }
+
+  handleEslEvent(evt) {
+    if (!evt || !evt.getHeader) return;
+    const subclass = evt.getHeader('Event-Subclass');
+    const eventUuid = evt.getHeader('Unique-ID');
+    if (eventUuid && eventUuid !== this.channelUuid) return;
+
+    if (subclass === 'mod_audio_fork::play_audio') {
+      const file = evt.getHeader('file');
+      if (file) {
+        console.log(`[${this.callId}] 🔊 Evento play_audio recebido! Tocando arquivo do FreeSWITCH: ${file}`);
+        this.endpoint.play(file).catch(e => {
+          if (!e.message?.includes('break')) console.error(`[${this.callId}] Erro ao tocar play_audio:`, e.message);
+        });
+      }
+    }
+
+    if (subclass === 'openai_s2s::server_event') {
+      // log de eventos internos da session
+    }
   }
 
   async start({ callId, endpoint }) {
@@ -125,44 +206,20 @@ class OpenAIS2SBridge {
     this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} session.delete`).catch(() => { });
     await wait(200);
 
-    // AEC inicia desligado e ANS ativado (Hardware-level)
-    this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => { });
-    this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => { });
-
-    // ==== NÍVEL 3 E 4 (BARGE-IN PROATIVO E ESTADO) ====
     if (this.endpoint.conn) {
       try {
         this.endpoint.conn.subscribe('CUSTOM openai_s2s::server_event');
+        this.endpoint.conn.subscribe('CUSTOM mod_audio_fork::play_audio');
         this.endpoint.conn.on('esl::event::CUSTOM::*', this.handleEslEvent);
-        console.log(`[${this.callId}] Monitoramento de eventos OpenAI ativado (ESL Subscriber).`);
+        console.log(`[${this.callId}] Monitoramento de eventos ESL ativado.`);
       } catch (err) {
-        console.log(`[${this.callId}] Erro ao tentar esl subscribe:`, err.message);
+        console.error(`[${this.callId}] Erro ao subscrever eventos ESL:`, err.message);
       }
     }
 
-    const connectCmd =
-      `uuid_openai_s2s ${this.channelUuid} session.create ` +
-      `api.openai.com /v1/realtime?model=${OPENAI_REALTIME_MODEL}&openai-beta=realtime=v1 bearer ${OPENAI_API_KEY}`;
-
-    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
-    console.log(`[${this.callId}] 📞 FASE 0: CONEXÃO - Iniciando base v11.0...`);
-    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
-
-    let response = await this.endpoint.api(connectCmd);
-    console.log(`[${this.callId}] resposta connect:`, response?.body || response);
-
-    // Se falhar, tentamos o formato JSON como fallback
-    if (response?.body?.includes('-ERR') || response?.body === '-ERR no reply') {
-      console.log(`[${this.callId}] tentando formato JSON...`);
-      const sessionConfig = {
-        type: 'session.create',
-        model: OPENAI_REALTIME_MODEL || 'gpt-realtime-mini',
-        api_key: OPENAI_API_KEY
-      };
-      const jsonCmd = `uuid_openai_s2s ${this.channelUuid} session.create '${JSON.stringify(sessionConfig)}'`;
-      response = await this.endpoint.api(jsonCmd);
-      console.log(`[${this.callId}] resposta connect (JSON):`, response?.body || response);
-    }
+    // AEC inicia desligado e ANS ativado (Hardware-level)
+    this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => { });
+    this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => { });
 
     // Lê o Nível de Barge-in do ambiente
     const bargeinLevel = parseInt(process.env.BARGEIN_LEVEL || '5', 10);
@@ -174,32 +231,42 @@ class OpenAIS2SBridge {
 
     this.isToneProbe = false;
 
-    if (bargeinLevel >= 3) {
-      console.log(`[${this.callId}] 📡 SONAR MODE: Iniciando captura acústica instantânea...`);
-      this.energyManager.reset(); // [v32.0] Força limpar acumuladores evitando leak
-      try {
-        await this.mediaBridge.start({
-          callId: this.callId,
-          endpoint: this.endpoint,
-          onAudio: (base64) => {
-            const buffer = Buffer.from(base64, 'base64');
+    // Inicializa a ponte de mídia sempre, pois o Node fará a ponte de áudio com a OpenAI
+    console.log(`[${this.callId}] 📡 SONAR MODE: Iniciando captura acústica instantânea...`);
+    this.energyManager.reset(); // Força limpar acumuladores evitando leak
+    try {
+      await this.mediaBridge.start({
+        callId: this.callId,
+        endpoint: this.endpoint,
+        onAudio: (base64) => {
+          const buffer = Buffer.from(base64, 'base64');
 
-            let isEcoSample = false;
-            if (this.calibrationActive && (this.isToneProbe || this.isAgentTalking)) {
-              isEcoSample = true;
-              this.calibrationSamplesRecv++;
-              if (this.calibrationSamplesRecv > 500) {
-                this.calibrationActive = false;
-              }
+          let isEcoSample = false;
+          if (this.calibrationActive && (this.isToneProbe || this.isAgentTalking)) {
+            isEcoSample = true;
+            this.calibrationSamplesRecv++;
+            if (this.calibrationSamplesRecv > 500) {
+              this.calibrationActive = false;
             }
-
-            this.energyManager.calculateEnergy(buffer, isEcoSample);
           }
-        });
-      } catch (err) {
-        console.error(`[${this.callId}] Erro ao iniciar captura Sonar:`, err.message);
-      }
 
+          this.energyManager.calculateEnergy(buffer, isEcoSample);
+
+          // Se a OpenAI estiver conectada e pronta, faz o upsampling e envia o áudio
+          if (this.openaiReady && this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+            const upsampledBuffer = upsample8to24(buffer);
+            this.openaiSocket.send(JSON.stringify({
+              type: 'input_audio_buffer.append',
+              audio: upsampledBuffer.toString('base64')
+            }));
+          }
+        }
+      });
+    } catch (err) {
+      console.error(`[${this.callId}] Erro ao iniciar captura Sonar/MediaBridge:`, err.message);
+    }
+
+    if (bargeinLevel >= 3) {
       // [v28.0] Desativa AEC temporariamente para o 'Sonar' ouvir o eco real (RAW)
       this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => { });
 
@@ -252,87 +319,131 @@ class OpenAIS2SBridge {
       await wait(1000);
     }
 
-    console.log(`[${this.callId}] Configurando Sessao API. Nível: ${bargeinLevel}`);
-
-    const sessionUpdate = {
-      type: 'session.update',
-      session: {
-        modalities: ['audio', 'text'],
-        instructions: 'Você é um assistente prestativo.'
+    console.log(`[${this.callId}] 📞 FASE 0: CONEXÃO - Iniciando ponte Node-OpenAI...`);
+    const openaiUrl = `wss://api.openai.com/v1/realtime?model=${OPENAI_REALTIME_MODEL}`;
+    
+    this.openaiSocket = new WebSocket(openaiUrl, {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`
       }
-    };
+    });
 
-    if (bargeinLevel >= 2) {
-      sessionUpdate.session.input_audio_transcription = { model: 'whisper-1' };
-    }
+    this.openaiSocket.on('open', () => {
+      console.log(`[${this.callId}] 🟢 Conexão com OpenAI Realtime estabelecida com sucesso!`);
+      
+      const OPENAI_AGENT_INSTRUCTIONS = process.env.OPENAI_AGENT_INSTRUCTIONS || 'Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma amigável.';
 
-    const jsonStr = JSON.stringify(sessionUpdate).replace(/\s/g, '');
-    const updateCmd = `uuid_openai_s2s ${this.channelUuid} client.event ${jsonStr}`;
-    await this.endpoint.api(updateCmd);
+      const sessionUpdate = {
+        type: 'session.update',
+        session: {
+          type: 'realtime', // <--- EXIGIDO NO NOVO GA
+          instructions: OPENAI_AGENT_INSTRUCTIONS
+        }
+      };
 
-    // Trigger de saudação inicial
-    const responseCreate = {
-      type: 'response.create',
-      response: {
-        modalities: ['audio', 'text'],
-        instructions: 'Diga: Olá, eu sou seu assistente de voz. Já estou te escutando.'
-      }
-    };
-    const triggerCmd = `uuid_openai_s2s ${this.channelUuid} client.event ${JSON.stringify(responseCreate).replace(/\s/g, '')}`;
-    await this.endpoint.api(triggerCmd);
+      // if (bargeinLevel >= 2) {
+      //   sessionUpdate.session.input_audio_transcription = { model: 'whisper-1' };
+      // }
 
-    // [v17.4] Aqui a IA já recebeu as configurações finais. Ocorreu zero latência de calibração extra.
-    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
-    console.log(`[${this.callId}] 🟢 START LISTENING - IA Configurada e Pronta!`);
-    console.log(`[${this.callId}] ════════════════════════════════════════════════`);
-  }
+      this.openaiSocket.send(JSON.stringify(sessionUpdate));
 
-  // Tratador de eventos seguro para não sujar o EventEmitter global
-  handleEslEvent(evt) {
-    if (!evt || !evt.getHeader) return;
-    const subclass = evt.getHeader('Event-Subclass');
-    const eventUuid = evt.getHeader('Unique-ID');
-    if (eventUuid && eventUuid !== this.channelUuid) return;
+      // Trigger de saudação inicial (deixa o agente saudar naturalmente baseado na instrução da sessão)
+      const responseCreate = {
+        type: 'response.create',
+        response: {
+          instructions: 'Faça uma saudação inicial curta e amigável.'
+        }
+      };
+      this.openaiSocket.send(JSON.stringify(responseCreate));
 
-    if (subclass === 'openai_s2s::server_event') {
+      this.openaiReady = true;
+
+      console.log(`[${this.callId}] ════════════════════════════════════════════════`);
+      console.log(`[${this.callId}] 🟢 START LISTENING - IA Configurada e Pronta!`);
+      console.log(`[${this.callId}] ════════════════════════════════════════════════`);
+    });
+
+    this.openaiSocket.on('message', (data) => {
       try {
-        const body = JSON.parse(evt.getBody());
+        const body = JSON.parse(data.toString());
 
-        if (['response.created', 'response.output_item.added', 'response.audio.delta'].includes(body.type)) {
-          this.isAgentTalking = true;
-        } else if (['response.done', 'response.audio.done', 'response.cancelled'].includes(body.type)) {
-          this.isAgentTalking = false;
+        if (body.type !== 'response.output_audio.delta' && body.type !== 'input_audio_buffer.committed') {
+          console.log(`[${this.callId}] 🔍 [DEBUG OpenAI] Evento Recebido: ${body.type}`);
         }
 
+        if (body.type === 'error') {
+          // Ignora erro inofensivo de tentar cancelar uma resposta que já acabou
+          if (body.error && body.error.code !== 'response_cancel_not_active') {
+            console.error(`[${this.callId}] 🔴 Erro recebido da OpenAI Realtime:`, body.error);
+          }
+        }
+
+        // Rastreia estado de fala do agente
+        if (['response.created', 'response.output_item.added'].includes(body.type)) {
+          this.isAgentTalking = true;
+        } else if (body.type === 'response.cancelled') {
+          this.isAgentTalking = false;
+          this.audioPlaybackBuffer = Buffer.alloc(0);
+        }
+
+        // Recebe pacotes de áudio de saída e acumula no buffer
+        if (body.type === 'response.output_audio.delta' && body.delta) {
+          const pcm24k = Buffer.from(body.delta, 'base64');
+          const pcm8k = downsample24to8(pcm24k);
+          this.audioPlaybackBuffer = Buffer.concat([this.audioPlaybackBuffer, pcm8k]);
+        }
+
+        // Quando o áudio termina, constrói o WAV e envia via stream HTTP para o FreeSWITCH
+        if (['response.output_audio.done', 'response.done'].includes(body.type) && this.audioPlaybackBuffer.length > 0) {
+          this.isAgentTalking = false;
+          
+          const wavHeader = createWavHeader(this.audioPlaybackBuffer.length);
+          const wavBuffer = Buffer.concat([wavHeader, this.audioPlaybackBuffer]);
+          
+          console.log(`[${this.callId}] 🔊 Enviando resposta para FreeSWITCH via stream HTTP (${wavBuffer.length} bytes)...`);
+          this.mediaBridge.setPlaybackAudio(wavBuffer);
+          
+          this.audioPlaybackBuffer = Buffer.alloc(0); // Reseta para o próximo
+        }
+
+        // Monitora Barge-In via OpenAI VAD
         if (body.type === 'input_audio_buffer.speech_started') {
           console.log(`[${this.callId}] 🎤 BARGE-IN: Fala detectada! Interrompendo agente...`);
           this.isAgentTalking = false;
-          this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} client.event {"type":"response.cancel"}`).catch(() => { });
+          this.audioPlaybackBuffer = Buffer.alloc(0); // Descarta áudio não tocado
+          this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
           this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => { });
         }
 
-      } catch (e) { }
-    }
+      } catch (err) {
+        console.error(`[${this.callId}] Erro ao decodificar mensagem OpenAI:`, err.message);
+      }
+    });
+
+    this.openaiSocket.on('close', (code, reason) => {
+      console.log(`[${this.callId}] 🔴 WebSocket OpenAI fechado. Código: ${code}, Razão: ${reason.toString()}`);
+      this.openaiReady = false;
+    });
+
+    this.openaiSocket.on('error', (err) => {
+      console.error(`[${this.callId}] 🔴 Erro no WebSocket OpenAI:`, err.message);
+    });
   }
 
   async stop() {
     if (this.thresholdTimer) clearInterval(this.thresholdTimer);
     if (this.mediaBridge) await this.mediaBridge.stop();
 
-    if (this.endpoint && this.endpoint.conn) {
-      this.endpoint.conn.removeListener('esl::event::CUSTOM::*', this.handleEslEvent);
+    if (this.openaiSocket) {
+      try {
+        this.openaiSocket.close();
+      } catch {}
+      this.openaiSocket = null;
     }
-
-    if (!this.endpoint || !this.channelUuid) return;
-
-    try {
-      await this.endpoint.api(`uuid_openai_s2s ${this.channelUuid} session.delete`);
-      console.log(`[${this.callId}] stop uuid_openai_s2s encerrado.`);
-    } catch (err) {
-      console.error(`[${this.callId}] erro stop uuid_openai_s2s:`, err.message || err);
-    }
+    this.openaiReady = false;
   }
 }
+
 
 srf.connect({
   host: DRACHTIO_HOST,

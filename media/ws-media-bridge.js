@@ -21,7 +21,18 @@ class WsMediaBridge {
     this.endpoint = endpoint;
 
     if (!this.server) {
-      this.server = http.createServer();
+      this.server = http.createServer((req, res) => {
+        if (req.url === '/audio' && this.audioBuffer) {
+          res.writeHead(200, {
+            'Content-Type': 'audio/wav',
+            'Content-Length': this.audioBuffer.length
+          });
+          res.end(this.audioBuffer);
+        } else {
+          res.writeHead(200);
+          res.end('ws media bridge ok');
+        }
+      });
       this.wss = new WebSocket.Server({ server: this.server });
 
       this.wss.on('connection', (ws, req) => {
@@ -90,13 +101,15 @@ class WsMediaBridge {
     console.log(`[${this.callId}] resposta uuid_audio_fork:`, response?.body || response);
   }
 
-  async play(base64Audio) {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({
-        type: 'play',
-        callId: this.callId,
-        audio: base64Audio
-      }));
+  setPlaybackAudio(wavBuffer) {
+    this.audioBuffer = wavBuffer;
+    const url = `http://${process.env.AUDIO_FORK_WS_HOST || '127.0.0.1'}:${this.port}/audio`;
+    console.log(`[${this.callId}] 🔊 Solicitando ao FreeSWITCH para tocar via HTTP: ${url}`);
+    
+    if (this.endpoint) {
+      this.endpoint.play(url).catch(e => {
+        if (!e.message?.includes('break')) console.error(`[${this.callId}] Erro no play HTTP:`, e.message);
+      });
     }
   }
 
