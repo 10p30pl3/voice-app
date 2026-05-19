@@ -142,7 +142,7 @@ class OpenAIS2SBridge {
 
     const connectCmd =
       `uuid_openai_s2s ${this.channelUuid} session.create ` +
-      `api.openai.com /v1/realtime?model=${OPENAI_REALTIME_MODEL} bearer ${OPENAI_API_KEY}`;
+      `api.openai.com /v1/realtime?model=${OPENAI_REALTIME_MODEL}&openai-beta=realtime=v1 bearer ${OPENAI_API_KEY}`;
 
     console.log(`[${this.callId}] ════════════════════════════════════════════════`);
     console.log(`[${this.callId}] 📞 FASE 0: CONEXÃO - Iniciando base v11.0...`);
@@ -258,17 +258,7 @@ class OpenAIS2SBridge {
       type: 'session.update',
       session: {
         modalities: ['audio', 'text'],
-        voice: 'marin',
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        prompt: { id: OPENAI_PROMPT_ID },
-        max_response_output_tokens: 4096,
-        turn_detection: {
-          type: 'server_vad',
-          threshold: vadThreshold,
-          prefix_padding_ms: prefixPaddingMs,
-          silence_duration_ms: silenceDurationMs
-        }
+        instructions: 'Você é um assistente prestativo.'
       }
     };
 
@@ -288,7 +278,7 @@ class OpenAIS2SBridge {
         instructions: 'Diga: Olá, eu sou seu assistente de voz. Já estou te escutando.'
       }
     };
-    const triggerCmd = `uuid_openai_s2s ${this.channelUuid} client.event '${JSON.stringify(responseCreate)}'`;
+    const triggerCmd = `uuid_openai_s2s ${this.channelUuid} client.event ${JSON.stringify(responseCreate).replace(/\s/g, '')}`;
     await this.endpoint.api(triggerCmd);
 
     // [v17.4] Aqui a IA já recebeu as configurações finais. Ocorreu zero latência de calibração extra.
