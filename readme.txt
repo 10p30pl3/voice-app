@@ -1,6 +1,6 @@
 Voice App (Node.js WebSocket Bridge para FreeSWITCH-OpenAI)
 ===========================================================
-
+------
 Este aplicativo atua como uma ponte (bridge) entre o FreeSWITCH (mod_audio_fork e mod_shout) e a API OpenAI Realtime, lidando com detecção de atividade de voz (VAD), streaming chunked de baixa latência e configurações dinâmicas de ambiente.
 
 1. CONFIGURANDO O AMBIENTE
