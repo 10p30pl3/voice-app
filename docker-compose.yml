@@ -8,11 +8,11 @@ services:
       - "--contact"
       - "sip:*;transport=udp,tcp"
       - "--external-ip"
-      - "192.168.15.36"
+      - "${DRACHTIO_EXTERNAL_IP:-192.168.15.36}"
       - "--port"
       - "9022"
       - "--secret"
-      - "cymru"
+      - "${DRACHTIO_SECRET:-cymru}"
       - "--loglevel"
       - "info"
     restart: unless-stopped

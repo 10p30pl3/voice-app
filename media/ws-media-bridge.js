@@ -1,8 +1,21 @@
 require('dotenv').config({ override: true });
 const WebSocket = require('ws');
 const http = require('http');
+const os = require('os');
 
-const AUDIO_FORK_WS_HOST = process.env.AUDIO_FORK_WS_HOST || '127.0.0.1';
+function getLocalIp() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+const AUDIO_FORK_WS_HOST = process.env.AUDIO_FORK_WS_HOST || getLocalIp();
 
 class WsMediaBridge {
   constructor() {
@@ -13,6 +26,9 @@ class WsMediaBridge {
     this.onAudio = null;
     this.endpoint = null;
     this.channelUuid = null;
+    this.stopped = false;
+    this.isPlaying = false;
+    this.playbackChunkCount = 0;
   }
 
   async start({ callId, endpoint, onAudio }) {
@@ -22,16 +38,8 @@ class WsMediaBridge {
 
     if (!this.server) {
       this.server = http.createServer((req, res) => {
-        if (req.url === '/audio' && this.audioBuffer) {
-          res.writeHead(200, {
-            'Content-Type': 'audio/wav',
-            'Content-Length': this.audioBuffer.length
-          });
-          res.end(this.audioBuffer);
-        } else {
-          res.writeHead(200);
-          res.end('ws media bridge ok');
-        }
+        res.writeHead(200);
+        res.end('ws media bridge ok');
       });
       this.wss = new WebSocket.Server({ server: this.server });
 
@@ -101,19 +109,40 @@ class WsMediaBridge {
     console.log(`[${this.callId}] resposta uuid_audio_fork:`, response?.body || response);
   }
 
-  setPlaybackAudio(wavBuffer) {
-    this.audioBuffer = wavBuffer;
-    const url = `http://${process.env.AUDIO_FORK_WS_HOST || '127.0.0.1'}:${this.port}/audio`;
-    console.log(`[${this.callId}] 🔊 Solicitando ao FreeSWITCH para tocar via HTTP: ${url}`);
-    
-    if (this.endpoint) {
-      this.endpoint.play(url).catch(e => {
-        if (!e.message?.includes('break')) console.error(`[${this.callId}] Erro no play HTTP:`, e.message);
-      });
+  startPlaybackStream() {
+    if (this.stopped) return;
+    this.isPlaying = true;
+    this.playbackChunkCount = 0;
+    console.log(`[${this.callId}] 🔊 Iniciando playback via WebSocket bidirecional (mod_audio_fork)`);
+  }
+
+  pushAudioChunk(chunk) {
+    if (this.stopped || !this.isPlaying) return;
+    // Envia áudio PCM de volta pelo WebSocket — mod_audio_fork injeta no canal FreeSWITCH
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(chunk);
+      this.playbackChunkCount++;
+      if (this.playbackChunkCount === 1) {
+        console.log(`[${this.callId}] 🔊 Primeiro chunk de áudio enviado via WS (${chunk.length} bytes)`);
+      }
     }
   }
 
+  endPlaybackStream() {
+    if (this.isPlaying) {
+      console.log(`[${this.callId}] 🔇 Playback encerrado (${this.playbackChunkCount} chunks enviados)`);
+    }
+    this.isPlaying = false;
+  }
+
   async stop() {
+    this.stopped = true;
+
+    // 1. Para o playback
+    this.isPlaying = false;
+    this.endPlaybackStream();
+
+    // 2. Para o audio_fork
     try {
       if (this.endpoint && this.channelUuid) {
         const cmd = `uuid_audio_fork ${this.channelUuid} stop`;
@@ -124,6 +153,7 @@ class WsMediaBridge {
       console.error(`[${this.callId}] erro stop uuid_audio_fork:`, err.message || err);
     }
 
+    // 4. Fecha WebSocket de mídia
     try { 
       if (this.socket) {
         this.socket.terminate(); 
@@ -138,10 +168,10 @@ class WsMediaBridge {
         this.wss = null;
       }
     } catch {}
-    
+
+    // 5. Fecha servidor HTTP (agora sem play pendente = sem File Not Found)
     if (this.server) {
       await new Promise((resolve) => {
-        // Encerra forçadamente todas as conexões HTTP zumbis para liberar a porta IMEDIATAMENTE
         this.server.closeAllConnections && this.server.closeAllConnections(); 
         this.server.close(() => {
           console.log(`[${this.callId}] [WsMediaBridge] Servidor de mídia parado.`);

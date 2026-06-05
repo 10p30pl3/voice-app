@@ -337,9 +337,24 @@ class OpenAIS2SBridge {
         type: 'session.update',
         session: {
           type: 'realtime', // <--- EXIGIDO NO NOVO GA
-          instructions: OPENAI_AGENT_INSTRUCTIONS
+          audio: {
+            input: {
+              turn_detection: {
+                type: 'server_vad',
+                threshold: vadThreshold,
+                prefix_padding_ms: prefixPaddingMs,
+                silence_duration_ms: silenceDurationMs
+              }
+            }
+          }
         }
       };
+
+      if (OPENAI_PROMPT_ID) {
+        sessionUpdate.session.prompt = { id: OPENAI_PROMPT_ID };
+      } else {
+        sessionUpdate.session.instructions = OPENAI_AGENT_INSTRUCTIONS;
+      }
 
       // if (bargeinLevel >= 2) {
       //   sessionUpdate.session.input_audio_transcription = { model: 'whisper-1' };
@@ -378,39 +393,42 @@ class OpenAIS2SBridge {
           }
         }
 
-        // Rastreia estado de fala do agente
-        if (['response.created', 'response.output_item.added'].includes(body.type)) {
-          this.isAgentTalking = true;
+        // Rastreia estado de fala do agente e inicia stream
+        if (body.type === 'response.created' || body.type === 'response.output_item.added') {
+          if (!this.isAgentTalking) {
+            this.isAgentTalking = true;
+            this.mediaBridge.startPlaybackStream();
+          }
         } else if (body.type === 'response.cancelled') {
           this.isAgentTalking = false;
-          this.audioPlaybackBuffer = Buffer.alloc(0);
+          this.mediaBridge.endPlaybackStream();
         }
 
-        // Recebe pacotes de áudio de saída e acumula no buffer
+        // Recebe pacotes de áudio de saída e injeta no stream HTTP
         if (body.type === 'response.output_audio.delta' && body.delta) {
+          if (!this.isAgentTalking) {
+            this.isAgentTalking = true;
+            this.mediaBridge.startPlaybackStream();
+          }
           const pcm24k = Buffer.from(body.delta, 'base64');
           const pcm8k = downsample24to8(pcm24k);
-          this.audioPlaybackBuffer = Buffer.concat([this.audioPlaybackBuffer, pcm8k]);
+          this.mediaBridge.pushAudioChunk(pcm8k);
         }
 
-        // Quando o áudio termina, constrói o WAV e envia via stream HTTP para o FreeSWITCH
-        if (['response.output_audio.done', 'response.done'].includes(body.type) && this.audioPlaybackBuffer.length > 0) {
-          this.isAgentTalking = false;
-          
-          const wavHeader = createWavHeader(this.audioPlaybackBuffer.length);
-          const wavBuffer = Buffer.concat([wavHeader, this.audioPlaybackBuffer]);
-          
-          console.log(`[${this.callId}] 🔊 Enviando resposta para FreeSWITCH via stream HTTP (${wavBuffer.length} bytes)...`);
-          this.mediaBridge.setPlaybackAudio(wavBuffer);
-          
-          this.audioPlaybackBuffer = Buffer.alloc(0); // Reseta para o próximo
+        // Quando o áudio termina, encerra o stream HTTP
+        if (['response.output_audio.done', 'response.done'].includes(body.type)) {
+          if (this.isAgentTalking) {
+            this.isAgentTalking = false;
+            console.log(`[${this.callId}] 🔊 Fim da resposta da IA. Fechando stream HTTP...`);
+            this.mediaBridge.endPlaybackStream();
+          }
         }
 
         // Monitora Barge-In via OpenAI VAD
         if (body.type === 'input_audio_buffer.speech_started') {
-          console.log(`[${this.callId}] 🎤 BARGE-IN: Fala detectada! Interrompendo agente...`);
+          console.log(`[${this.callId}] 🎤 BARGE-IN: Fala detectada! Interrompendo agente e stream...`);
           this.isAgentTalking = false;
-          this.audioPlaybackBuffer = Buffer.alloc(0); // Descarta áudio não tocado
+          this.mediaBridge.endPlaybackStream(); // Corta imediatamente a reprodução
           this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
           this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => { });
         }
@@ -431,6 +449,11 @@ class OpenAIS2SBridge {
   }
 
   async stop() {
+    if (this.endpoint && this.endpoint.conn) {
+      try {
+        this.endpoint.conn.removeListener('esl::event::CUSTOM::*', this.handleEslEvent);
+      } catch (e) { }
+    }
     if (this.thresholdTimer) clearInterval(this.thresholdTimer);
     if (this.mediaBridge) await this.mediaBridge.stop();
 
