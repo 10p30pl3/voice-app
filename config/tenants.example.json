@@ -1,0 +1,24 @@
+[
+  {
+    "id": "cliente-clinica-saude",
+    "name": "Clínica Saúde & Vida",
+    "dids": ["551140041234", "1001"],
+    "active": true,
+    "openaiApiKey": "sk-proj-chave-especifica-do-cliente-se-tiver",
+    "openaiModel": "gpt-realtime-mini",
+    "openaiPromptId": "pmpt_prompt_da_clinica",
+    "instructions": "Você é a secretária virtual da Clínica Saúde. Agende consultas de forma acolhedora.",
+    "voice": "shimmer",
+    "maxDurationSec": 600
+  },
+  {
+    "id": "cliente-imobiliaria",
+    "name": "Imobiliária Prime",
+    "dids": ["551140049999", "1002"],
+    "active": true,
+    "openaiModel": "gpt-realtime-mini",
+    "instructions": "Você é o assistente virtual da Imobiliária Prime. Ajude o cliente a encontrar imóveis para locação ou venda.",
+    "voice": "alloy",
+    "maxDurationSec": 900
+  }
+]
