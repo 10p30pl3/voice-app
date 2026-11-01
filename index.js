@@ -32,12 +32,13 @@ const mrf = new Mrf(srf);
 const fsPool = new FreeSwitchPool(mrf);
 
 let isShuttingDown = false;
+let isDrachtioConnected = false;
 const activeBridges = new Map(); // callId -> OpenAIS2SBridge
 
 // Endpoint /health agora exibe métricas do Worker, Tenants e de todo o Cluster FreeSWITCH
 mediaServer.setHealthCallback(() => ({
   drachtioMode: DRACHTIO_MODE,
-  drachtioConnected: DRACHTIO_MODE === 'outbound' ? true : !!srf.connected,
+  drachtioConnected: DRACHTIO_MODE === 'outbound' ? true : isDrachtioConnected,
   freeSwitchCluster: fsPool.getPoolStats(),
   activeCallsByTenant: tenantManager.getTenantStats(),
   shuttingDown: isShuttingDown
@@ -666,11 +667,13 @@ if (DRACHTIO_MODE === 'outbound') {
       console.error('🔴 Erro conectando ao Drachtio:', err);
       return;
     }
+    isDrachtioConnected = true;
     console.log(`✅ Conectado ao Drachtio SRF: ${hp} (Worker #${WORKER_ID})`);
   });
 }
 
 srf.on('disconnect', () => {
+  isDrachtioConnected = false;
   console.error('🚨 Drachtio SRF desconectado!');
 });
 
