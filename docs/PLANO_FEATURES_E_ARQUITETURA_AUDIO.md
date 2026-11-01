@@ -86,7 +86,34 @@ flowchart TD
 
 ---
 
-## 4. Plano de Features (Roadmap de Evolução)
+## 4. Camada de Inteligência Acústica (Ruído, Sonar e AEC)
+
+A plataforma conta com um subsistema proprietário de processamento acústico em tempo real gerenciado pelo [`utils/energy-manager.js`](../utils/energy-manager.js) e integrado no ciclo de vida de cada chamada SIP:
+
+### 1. Medição Contínua de Ruído Ambiente (`Noise Floor` via EMA)
+- **Como funciona:** Calcula o RMS (Root Mean Square) de cada frame de 20ms de áudio PCM16.
+- **Rastreamento:** Aplica um filtro de média móvel exponencial (*Exponential Moving Average*, $\alpha = 0.1$) apenas durante períodos sem fala, medindo com precisão o piso de ruído da linha telefônica e do ambiente físico.
+- **Classificação em 4 Perfis:**
+  - `SILENCE` (NF < 50): Sala silenciosa / fone de ouvido isolado.
+  - `OFFICE` (NF 50 - 200): Escritório com ar-condicionado ou conversas de fundo.
+  - `STREET` (NF 200 - 600): Ruído urbano, trânsito ou vento moderado.
+  - `TV` (NF > 600): Ambiente ruidoso ou com televisão ligada no fundo.
+
+### 2. Detecção Ativa de Dispositivo via Sonar (Algoritmo de Goertzel)
+- **Como funciona:** Se `BARGEIN_LEVEL >= 3`, durante os primeiros 700ms da conexão, o sistema injeta uma sonda acústica calibrada em 425Hz (`tone_stream://v=0;%(700,0,425)`).
+- **Análise Espectral:** O algoritmo de Goertzel varre os bins de frequência de 415Hz a 435Hz na resposta do microfone do usuário para calcular a magnitude acústica refletida e a razão de retorno (*Energy Ratio*).
+- **Decisão:**
+  - **Viva-Voz (`viva_voz`)**: Se a magnitude e a energia de retorno superarem o limiar acústico (`Ratio >= 2.0x` ou `Magnitude > 40`), significa que o som do alto-falante vazou diretamente no microfone pela acústica da sala.
+  - **Fone de Ouvido (`fone_ouvido`)**: Se o sinal retornar apenas ruído ou crosstalk elétrico mascarado (`Ratio < 2.0x`), classifica como fone.
+
+### 3. Cancelamento Adaptativo de Eco (AEC)
+- **Em Viva-Voz:** O sistema aciona via ESL no FreeSWITCH: `uuid_setvar <uuid> echo_cancellation true`. Isso ativa o cancelador de eco acústico de hardware/software no core da telefonia e eleva o limiar do VAD da OpenAI para proteger contra falso barge-in gerado pela própria voz da IA saindo no alto-falante.
+- **Em Fone de Ouvido:** O sistema mantém `echo_cancellation false`. Isso elimina qualquer perda de fase ou distorção desnecessária, permitindo máxima transparência e latência zero no diálogo.
+- **Fast-Lock pós-AMD:** Em chamadas com AMD ativo (discador), como o sistema já captura áudio real durante o "Alô?" do cliente (~1,5s), ele pula o bip sonoro de 700ms e calibra o perfil acústico imediatamente sem atraso para o humano.
+
+---
+
+## 5. Plano de Features (Roadmap de Evolução)
 
 ```mermaid
 flowchart LR
