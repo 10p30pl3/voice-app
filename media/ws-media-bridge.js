@@ -219,6 +219,11 @@ class WsMediaBridge {
     this.stopped = false;
     this.isPlaying = false;
     this.playbackChunkCount = 0;
+    this.recorder = null;
+  }
+
+  setRecorder(recorder) {
+    this.recorder = recorder;
   }
 
   async start({ callId, endpoint, onAudio }) {
@@ -304,6 +309,9 @@ class WsMediaBridge {
     if (this.stopped || !this.isPlaying) return;
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(chunk);
+      if (this.recorder) {
+        this.recorder.pushAiChunk(chunk);
+      }
       this.playbackChunkCount++;
       if (this.playbackChunkCount === 1) {
         console.log(`[${this.callId}] 🔊 Primeiro chunk de áudio enviado via WS (${chunk.length} bytes)`);
@@ -320,6 +328,9 @@ class WsMediaBridge {
 
   killAudio() {
     this.isPlaying = false;
+    if (this.recorder) {
+      this.recorder.clearAiBuffer();
+    }
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       try {
         // Envia mensagem JSON nativa do mod_audio_fork para descarte imediato do buffer de áudio
@@ -339,6 +350,11 @@ class WsMediaBridge {
     this.stopped = true;
 
     this.endPlaybackStream();
+
+    if (this.recorder) {
+      await this.recorder.stop();
+      this.recorder = null;
+    }
 
     if (this.channelUuid) {
       mediaServerSingleton.unregisterSession(this.channelUuid);

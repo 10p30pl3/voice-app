@@ -36,7 +36,12 @@ class TenantManager {
       },
       stt: {
         enabled: process.env.STT_DEFAULT_ENABLED === 'true'
-      }
+      },
+      dtmf: {
+        enabled: process.env.DTMF_DEFAULT_ENABLED !== 'false',
+        debounceMs: parseInt(process.env.DTMF_DEBOUNCE_MS || '1200', 10)
+      },
+      recordingDir: process.env.RECORDING_DIR || null
     };
   }
 
@@ -62,6 +67,10 @@ class TenantManager {
                 stt: {
                   ...defaultTenant.stt,
                   ...(item.stt || {})
+                },
+                dtmf: {
+                  ...defaultTenant.dtmf,
+                  ...(item.dtmf || {})
                 },
                 active: item.active !== false
               });

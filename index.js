@@ -26,6 +26,7 @@ const { mediaServer } = require('./media/ws-media-bridge');
 const tenantManager = require('./utils/tenant-manager');
 const FreeSwitchPool = require('./utils/freeswitch-pool');
 const { WhisperSession } = require('./media/whisper-client');
+const { CallRecorder, formatDateTime } = require('./utils/call-recorder');
 
 const srf = new Srf();
 const mrf = new Mrf(srf);
@@ -218,7 +219,12 @@ class OpenAIS2SBridge {
     this.maxDurationTimer = null;
     this.isTerminated = false;
 
+    this.recorder = null;
+    this.dtmfBuffer = '';
+    this.dtmfTimer = null;
+
     this.handleEslEvent = this.handleEslEvent.bind(this);
+    this.handleDtmf = this.handleDtmf.bind(this);
   }
 
   handleEslEvent(evt) {
@@ -323,6 +329,19 @@ class OpenAIS2SBridge {
         this.mediaBridge.pushAudioChunk(pcm8k);
       }
 
+      if (
+        (body.type === 'response.output_audio_transcript.done' || body.type === 'response.audio_transcript.done') &&
+        body.transcript
+      ) {
+        if (this.whisperSession && this.whisperSession.isSttEnabled) {
+          if (this.recorder) {
+            this.recorder.addTranscript('Atendente', body.transcript);
+          } else {
+            console.log(`[${this.callId}] 📝 [${formatDateTime()}] Atendente: ${body.transcript}`);
+          }
+        }
+      }
+
       if (['response.output_audio.done', 'response.done'].includes(body.type)) {
         if (this.isAgentTalking) {
           this.isAgentTalking = false;
@@ -346,6 +365,86 @@ class OpenAIS2SBridge {
       }
     } catch (err) {
       console.error(`[${this.callId}] Erro ao decodificar mensagem OpenAI:`, err.message);
+    }
+  }
+
+  handleDtmf(evt) {
+    if (this.isTerminated) return;
+    const digit = evt?.dtmf || evt?.digit;
+    if (!digit) return;
+
+    console.log(`[${this.callId}] 🔢 [DTMF] Dígito capturado: '${digit}'`);
+
+    // Barge-in imediato no primeiro dígito caso a IA esteja falando
+    if (this.isAgentTalking) {
+      this.isAgentTalking = false;
+      this.mediaBridge.killAudio();
+      if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+        this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
+      }
+      if (this.endpoint && this.channelUuid) {
+        this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
+        this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
+      }
+    }
+
+    if (this.dtmfTimer) {
+      clearTimeout(this.dtmfTimer);
+      this.dtmfTimer = null;
+    }
+
+    // Se o usuário pressionar '#', envia os dígitos acumulados imediatamente sem aguardar debounce
+    if (digit === '#') {
+      if (this.dtmfBuffer.length > 0) {
+        this.flushDtmfBuffer();
+      }
+      return;
+    }
+
+    this.dtmfBuffer += String(digit);
+    const debounceMs = this.tenant?.dtmf?.debounceMs || 1200;
+    this.dtmfTimer = setTimeout(() => {
+      this.flushDtmfBuffer();
+    }, debounceMs);
+  }
+
+  flushDtmfBuffer() {
+    if (this.dtmfTimer) {
+      clearTimeout(this.dtmfTimer);
+      this.dtmfTimer = null;
+    }
+    if (!this.dtmfBuffer || this.isTerminated) return;
+
+    const digits = this.dtmfBuffer;
+    this.dtmfBuffer = '';
+
+    console.log(`[${this.callId}] 🔢 [DTMF FLUSH] Sequência completa enviada à IA: "${digits}"`);
+
+    if (this.whisperSession && this.whisperSession.isSttEnabled) {
+      if (this.recorder) {
+        this.recorder.addTranscript('Cliente', `[DTMF: ${digits}]`);
+      } else {
+        console.log(`[${this.callId}] 📝 [${formatDateTime()}] Cliente: [DTMF: ${digits}]`);
+      }
+    }
+
+    if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+      this.openaiSocket.send(
+        JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: `[DTMF digitado pelo usuário no teclado: ${digits}]`
+              }
+            ]
+          }
+        })
+      );
+      this.openaiSocket.send(JSON.stringify({ type: 'response.create' }));
     }
   }
 
@@ -401,10 +500,36 @@ class OpenAIS2SBridge {
       });
 
       this.whisperSession.on('transcript', (stt) => {
-        console.log(`[${this.callId}] 📝 [STT] "${stt.text}"`);
+        if (this.recorder) {
+          this.recorder.addTranscript('Cliente', stt.text);
+        } else {
+          console.log(`[${this.callId}] 📝 [${formatDateTime()}] Cliente: ${stt.text}`);
+        }
       });
 
       this.whisperSession.start();
+    }
+
+    // 2. Gravação Dual-Stream Stereo (.wav) + Transcrição (.txt) SOMENTE quando a transcrição (STT) estiver habilitada
+    if (this.whisperSession && this.whisperSession.isSttEnabled) {
+      this.recorder = new CallRecorder({
+        callId: this.callId,
+        tenantId: this.tenant.id,
+        recordingDir: this.tenant.recordingDir
+      });
+      this.mediaBridge.setRecorder(this.recorder);
+      await this.recorder.start();
+    }
+
+    // 2.1 Captura de DTMF In-Call via FreeSWITCH ESL / drachtio-fsmrf
+    const dtmfHeader = this.sipHeaders['x-dtmf-enabled'];
+    const isDtmfEnabled =
+      dtmfHeader !== undefined
+        ? String(dtmfHeader).toLowerCase() !== 'false'
+        : this.tenant.dtmf?.enabled !== false;
+
+    if (isDtmfEnabled && this.endpoint && typeof this.endpoint.on === 'function') {
+      this.endpoint.on('dtmf', this.handleDtmf);
     }
 
     // 3. Limpeza de sessões residuais
@@ -441,6 +566,11 @@ class OpenAIS2SBridge {
         // Encaminha áudio ao Whisper para AMD e/ou STT (ignorando o tom de calibração 425Hz do Sonar)
         if (this.whisperSession && !this.isToneProbe) {
           this.whisperSession.pushAudio(buffer, 8000);
+        }
+
+        // Gravação Stereo (Left=Cliente, Right=Atendente) guiada pelo clock de 20ms do RTP (somente quando STT/Gravação ativa)
+        if (this.recorder && !this.isToneProbe) {
+          this.recorder.writeUserChunk(buffer);
         }
 
         // OTIMIZAÇÃO DE ESCALA: Só calcula RMS e Goertzel durante os 1.1s iniciais de calibração Sonar!
@@ -649,6 +779,17 @@ class OpenAIS2SBridge {
       this.maxDurationTimer = null;
     }
 
+    if (this.dtmfTimer) {
+      clearTimeout(this.dtmfTimer);
+      this.dtmfTimer = null;
+    }
+
+    if (this.endpoint && typeof this.endpoint.removeListener === 'function') {
+      try {
+        this.endpoint.removeListener('dtmf', this.handleDtmf);
+      } catch {}
+    }
+
     if (this.endpoint && this.endpoint.conn) {
       try {
         this.endpoint.conn.removeListener('esl::event::CUSTOM::*', this.handleEslEvent);
@@ -657,6 +798,11 @@ class OpenAIS2SBridge {
 
     if (this.mediaBridge) {
       await this.mediaBridge.stop();
+    }
+
+    if (this.recorder) {
+      await this.recorder.stop();
+      this.recorder = null;
     }
 
     if (this.whisperSession) {
@@ -756,6 +902,7 @@ srf.invite(async (req, res) => {
     const sipHeaders = {
       'x-amd-enabled': req.get('x-amd-enabled') || req.get('X-AMD-Enabled'),
       'x-stt-enabled': req.get('x-stt-enabled') || req.get('X-STT-Enabled'),
+      'x-dtmf-enabled': req.get('x-dtmf-enabled') || req.get('X-DTMF-Enabled'),
       'x-tenant-id': req.get('x-tenant-id') || req.get('X-Tenant-ID')
     };
 

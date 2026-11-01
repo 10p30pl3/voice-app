@@ -19,7 +19,9 @@ const { execFileSync } = require('child_process');
 
 const { WhisperPool, WhisperSession, upsample8to16 } = require('./media/whisper-client');
 const FreeSwitchPool = require('./utils/freeswitch-pool');
+const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
+const { CallRecorder, formatDateTime } = require('./utils/call-recorder');
 
 // Extrai helpers de áudio do index.js para teste unitário
 const indexContent = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
@@ -44,7 +46,7 @@ async function runQaSuite() {
   // -------------------------------------------------------------------------
   // 1. Teste de DSP e Codecs de Áudio
   // -------------------------------------------------------------------------
-  console.log('👉 [1/6] Testando DSP e Codecs (PCM 8k, 16k, 24k e G.711 u-law)...');
+  console.log('👉 [1/8] Testando DSP e Codecs (PCM 8k, 16k, 24k e G.711 u-law)...');
   
   // 1.1 upsample8to16
   const buf8k = Buffer.alloc(320);
@@ -73,7 +75,7 @@ async function runQaSuite() {
   // -------------------------------------------------------------------------
   // 2. Teste do TenantManager (Deep Merge, Limite de Canais, CPS e Segurança)
   // -------------------------------------------------------------------------
-  console.log('👉 [2/6] Testando TenantManager (Segurança, Concorrência e CPS)...');
+  console.log('👉 [2/8] Testando TenantManager (Segurança, Concorrência e CPS)...');
   const tmpConfig = path.join(os.tmpdir(), `tenants-qa-${Date.now()}.json`);
   fs.writeFileSync(
     tmpConfig,
@@ -125,7 +127,7 @@ async function runQaSuite() {
   // -------------------------------------------------------------------------
   // 3. Teste do FreeSwitchPool (Least-Connections, Failover e Reset de Desconexão)
   // -------------------------------------------------------------------------
-  console.log('👉 [3/6] Testando FreeSwitchPool (Least-Connections, Failover e Cleanup)...');
+  console.log('👉 [3/8] Testando FreeSwitchPool (Least-Connections, Failover e Cleanup)...');
   const fsPool = new FreeSwitchPool();
   let disconnectListener1 = null;
   const fakeMs1 = {
@@ -167,7 +169,7 @@ async function runQaSuite() {
   // -------------------------------------------------------------------------
   // 4. Teste do WsMediaServer (Extração de UUID, Anti-Hijack e Suporte Binário)
   // -------------------------------------------------------------------------
-  console.log('👉 [4/6] Testando WsMediaServer (Extração de UUID, Anti-Hijack e ArrayBuffer)...');
+  console.log('👉 [4/8] Testando WsMediaServer (Extração de UUID, Anti-Hijack e ArrayBuffer)...');
   let receivedAudio = null;
   const fakeBridgeSession = {
     attachSocket: (ws) => {
@@ -191,7 +193,7 @@ async function runQaSuite() {
   // -------------------------------------------------------------------------
   // 5. Teste Integrado do WhisperSession (4 Modos + Fail-Open em Circuit Breaker)
   // -------------------------------------------------------------------------
-  console.log('👉 [5/6] Testando WhisperSession (4 Modos + Fail-Open de Pool)...');
+  console.log('👉 [5/8] Testando WhisperSession (4 Modos + Fail-Open de Pool)...');
 
   const mockWss = new WebSocket.Server({ port: 0 });
   const mockPort = mockWss.address().port;
@@ -302,7 +304,7 @@ async function runQaSuite() {
   // -------------------------------------------------------------------------
   // 6. Teste de Classificação Léxica/Heurística e LGPD PII Redactor
   // -------------------------------------------------------------------------
-  console.log('👉 [6/6] Testando Classificador AMD Expandido e PII Redactor...');
+  console.log('👉 [6/8] Testando Classificador AMD Expandido e PII Redactor...');
   const pyScript = `
 import sys
 sys.path.insert(0, 'whisper-service')
@@ -345,9 +347,169 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
 `;
   const pyOut = execFileSync('python3', ['-c', pyScript], { encoding: 'utf8' });
   console.log(pyOut.trim());
+  console.log('');
 
-  console.log('\n====================================================');
-  console.log('🎉 TODOS OS 6 BLOCOS DE QA PASSARAM COM 100% DE SUCESSO!');
+  // -------------------------------------------------------------------------
+  // 7. Teste de Gravação Dual-Stream Stereo (CallRecorder) + Transcrição Cliente/Atendente
+  // -------------------------------------------------------------------------
+  console.log('👉 [7/8] Testando CallRecorder (WAV Stereo 8kHz, Isolamento L/R, Barge-in e Transcrição Data/Hora)...');
+  const tmpRecDir = path.join(os.tmpdir(), `recordings-qa-${Date.now()}`);
+  const rec = new CallRecorder({
+    callId: 'call-stereo-qa',
+    tenantId: 'tenant-qa',
+    recordingDir: tmpRecDir
+  });
+
+  await rec.start();
+  assert.strictEqual(rec.isStarted, true);
+
+  // Prepara 1 frame de 20ms (160 samples = 320 bytes) do Cliente (valor constante 1234)
+  const userFrame = Buffer.alloc(320);
+  for (let i = 0; i < 160; i++) userFrame.writeInt16LE(1234, i * 2);
+
+  // Prepara 2 frames de 20ms (640 bytes) do Atendente (valor constante -4321)
+  const aiTwoFrames = Buffer.alloc(640);
+  for (let i = 0; i < 320; i++) aiTwoFrames.writeInt16LE(-4321, i * 2);
+  rec.pushAiChunk(aiTwoFrames);
+
+  // Escreve o 1º frame de 20ms: deve consumir 320 bytes da IA e sobrar 320 bytes no buffer da IA
+  rec.writeUserChunk(userFrame);
+  assert.strictEqual(rec.aiBytesAvailable, 320, 'Deve restar 1 frame de 20ms da IA após 1º tick');
+
+  // Simula Barge-In: deve purgar imediatamente o restante do buffer da IA
+  rec.clearAiBuffer();
+  assert.strictEqual(rec.aiBytesAvailable, 0, 'Barge-in deve truncar o buffer futuro da IA');
+
+  // Escreve o 2º frame de 20ms após barge-in: Canal Direito (Atendente) deve sair com silêncio (0)
+  rec.writeUserChunk(userFrame);
+
+  // Registra diálogo formatado com data/hora e divisão Cliente: / Atendente:
+  const fixedDate1 = new Date('2026-11-01T18:15:30');
+  const fixedDate2 = new Date('2026-11-01T18:15:34');
+  const e1 = rec.addTranscript('Cliente', 'Olá, gostaria de consultar meu saldo.', fixedDate1);
+  const e2 = rec.addTranscript('Atendente', 'Claro! Por favor, digite ou fale seu CPF.', fixedDate2);
+
+  assert.strictEqual(e1.formatted, '[2026-11-01 18:15:30] Cliente: Olá, gostaria de consultar meu saldo.');
+  assert.strictEqual(e2.formatted, '[2026-11-01 18:15:34] Atendente: Claro! Por favor, digite ou fale seu CPF.');
+
+  await rec.stop();
+
+  // Valida arquivo WAV binário gerado
+  const wavBuf = fs.readFileSync(rec.filePath);
+  // Header 44 bytes + 2 frames stereo de 640 bytes = 44 + 1280 = 1324 bytes
+  assert.strictEqual(wavBuf.length, 44 + 1280, 'Tamanho do WAV deve ser 44 + 1280 bytes');
+  assert.strictEqual(wavBuf.toString('ascii', 0, 4), 'RIFF');
+  assert.strictEqual(wavBuf.toString('ascii', 8, 12), 'WAVE');
+  assert.strictEqual(wavBuf.readUInt16LE(22), 2, 'WAV deve ter 2 canais (Stereo)');
+  assert.strictEqual(wavBuf.readUInt32LE(24), 8000, 'Sample rate deve ser 8000 Hz');
+  assert.strictEqual(wavBuf.readUInt32LE(40), 1280, 'Subchunk2Size deve ser atualizado no stop() com 1280 bytes');
+
+  // Verifica 1ª amostra do 1º frame (Left = Cliente = 1234, Right = Atendente = -4321)
+  assert.strictEqual(wavBuf.readInt16LE(44), 1234, 'Canal Esquerdo (Cliente) deve conter 1234');
+  assert.strictEqual(wavBuf.readInt16LE(46), -4321, 'Canal Direito (Atendente) deve conter -4321 antes do barge-in');
+
+  // Verifica 1ª amostra do 2º frame pós-barge-in (Left = Cliente = 1234, Right = Atendente = 0 silêncio)
+  assert.strictEqual(wavBuf.readInt16LE(44 + 640), 1234, 'Canal Esquerdo no 2º frame deve conter 1234');
+  assert.strictEqual(wavBuf.readInt16LE(44 + 642), 0, 'Canal Direito no 2º frame pós-barge-in deve ser 0 (silêncio)');
+
+  // Valida arquivo .txt de transcrição
+  const txtContent = fs.readFileSync(rec.transcriptPath, 'utf8').trim().split('\n');
+  assert.strictEqual(txtContent.length, 2);
+  assert.strictEqual(txtContent[0], '[2026-11-01 18:15:30] Cliente: Olá, gostaria de consultar meu saldo.');
+  assert.strictEqual(txtContent[1], '[2026-11-01 18:15:34] Atendente: Claro! Por favor, digite ou fale seu CPF.');
+
+  fs.rmSync(tmpRecDir, { recursive: true, force: true });
+  console.log('   ✅ CallRecorder Stereo (WAV 8kHz L/R + Barge-in + Transcrição Cliente/Atendente com Data/Hora) aprovado!\n');
+
+  // -------------------------------------------------------------------------
+  // 8. Teste de Regra Condicional de Gravação (Somente com STT) + Captura DTMF (Debounce & '#')
+  // -------------------------------------------------------------------------
+  console.log('👉 [8/8] Testando Regra Condicional de Gravação (STT) e DTMF In-Call (Debounce, # e Barge-In)...');
+
+  // 8.1 Verifica que WsMediaBridge.killAudio() também aciona clearAiBuffer() no gravador quando acoplado
+  const bridgeMedia = new WsMediaBridge();
+  let clearAiCalled = false;
+  bridgeMedia.setRecorder({
+    pushAiChunk: () => {},
+    clearAiBuffer: () => { clearAiCalled = true; },
+    stop: async () => {}
+  });
+  bridgeMedia.killAudio();
+  assert.strictEqual(clearAiCalled, true, 'killAudio() deve truncar o buffer de gravação da IA no Barge-In');
+
+  // 8.2 Simula lógica de DTMF com Debounce e '#'
+  let sentOpenAiEvents = [];
+  let bargeInKilled = false;
+  const dtmfHarness = {
+    callId: 'qa-dtmf',
+    isTerminated: false,
+    isAgentTalking: true,
+    dtmfBuffer: '',
+    dtmfTimer: null,
+    tenant: { dtmf: { enabled: true, debounceMs: 80 } },
+    whisperSession: { isSttEnabled: true },
+    recorder: {
+       transcripts: [],
+      addTranscript(speaker, text) {
+        const formatted = `[${formatDateTime()}] ${speaker}: ${text}`;
+        this.transcripts.push(formatted);
+        return { formatted };
+      }
+    },
+    mediaBridge: {
+      killAudio: () => { bargeInKilled = true; }
+    },
+    openaiSocket: {
+      readyState: WebSocket.OPEN,
+      send: (msg) => sentOpenAiEvents.push(JSON.parse(msg))
+    }
+  };
+
+  // Extrai métodos handleDtmf e flushDtmfBuffer da classe OpenAIS2SBridge em index.js
+  const handleDtmfMatch = indexContent.match(/handleDtmf\(evt\)\s*\{[\s\S]+?\n  \}\n\n  flushDtmfBuffer\(\)\s*\{[\s\S]+?\n  \}/);
+  assert.ok(handleDtmfMatch, 'Métodos handleDtmf e flushDtmfBuffer devem existir em index.js');
+  const dtmfMethods = eval(`(class { ${handleDtmfMatch[0]} })`).prototype;
+  dtmfHarness.handleDtmf = dtmfMethods.handleDtmf.bind(dtmfHarness);
+  dtmfHarness.flushDtmfBuffer = dtmfMethods.flushDtmfBuffer.bind(dtmfHarness);
+
+  // Digita '1', '2', '3', '#' (flush imediato no '#')
+  dtmfHarness.handleDtmf({ dtmf: '1' });
+  assert.strictEqual(bargeInKilled, true, '1º dígito DTMF deve acionar Barge-In imediato se IA estiver falando');
+  assert.strictEqual(dtmfHarness.isAgentTalking, false);
+  dtmfHarness.handleDtmf({ dtmf: '2' });
+  dtmfHarness.handleDtmf({ dtmf: '3' });
+  dtmfHarness.handleDtmf({ dtmf: '#' });
+
+  // Verifica que 'response.cancel', 'conversation.item.create' e 'response.create' foram enviados imediatamente
+  assert.strictEqual(sentOpenAiEvents[0].type, 'response.cancel');
+  assert.strictEqual(sentOpenAiEvents[1].type, 'conversation.item.create');
+  assert.strictEqual(
+    sentOpenAiEvents[1].item.content[0].text,
+    '[DTMF digitado pelo usuário no teclado: 123]'
+  );
+  assert.strictEqual(sentOpenAiEvents[2].type, 'response.create');
+  assert.ok(dtmfHarness.recorder.transcripts[0].includes('Cliente: [DTMF: 123]'));
+
+  // Testa disparo por timeout de Debounce (sem '#')
+  sentOpenAiEvents = [];
+  dtmfHarness.handleDtmf({ dtmf: '9' });
+  dtmfHarness.handleDtmf({ dtmf: '8' });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.strictEqual(sentOpenAiEvents.length, 2, 'Debounce timer deve enviar conversation.item.create + response.create');
+  assert.strictEqual(
+    sentOpenAiEvents[0].item.content[0].text,
+    '[DTMF digitado pelo usuário no teclado: 98]'
+  );
+
+  // Verifica no código de index.js que CallRecorder só é instanciado se this.whisperSession.isSttEnabled for true
+  assert.ok(
+    indexContent.includes('if (this.whisperSession && this.whisperSession.isSttEnabled) {\n      this.recorder = new CallRecorder('),
+    'Gravação stereo deve ser condicionada estritamente a this.whisperSession.isSttEnabled'
+  );
+  console.log('   ✅ Regra Condicional de Gravação (STT) + DTMF In-Call aprovados!\n');
+
+  console.log('====================================================');
+  console.log('🎉 TODOS OS 8 BLOCOS DE QA PASSARAM COM 100% DE SUCESSO!');
   console.log('====================================================');
 }
 
