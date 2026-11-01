@@ -7,33 +7,36 @@ except ImportError:
 
 # Padrões Semânticos de Operadoras Telefônicas Brasileiras (Claro, Vivo, Tim, Oi, Embratel, etc.)
 PATTERNS_OPERADORA = [
-    r'n[uú]mero (?:chamado )?(?:n[aã]o existe|est[aá] bloqueado|n[aã]o recebe)',
+    r'n[uú]mero (?:chamado |discado )?(?:n[aã]o existe|est[aá] bloqueado|n[aã]o recebe)',
     r'est[aá] desligado ou fora (?:da [aá]rea)?',
     r'(?:fora|sem) [aá]rea de cobertura',
-    r'impossibilitado de receber',
+    r'impossibilitado de (?:receber|atender)',
     r'n[aã]o foi poss[ií]vel completar (?:sua|a) liga[cç][aã]o',
     r'verifique o n[uú]mero discado',
     r'sua chamada est[aá] sendo encaminhada',
     r'este n[uú]mero est[aá] programado para n[aã]o receber',
     r'servi[cç]o de atendimento da operadora',
     r'chamada n[aã]o permitida',
+    r'o telefone que voc[eê] discou',
 ]
 
 # Padrões Semânticos de Caixas Postais / Secretárias Eletrônicas / Live Voicemail
 PATTERNS_CAIXA_POSTAL = [
     r'caixa postal',
+    r'caixa de mensage(?:m|ns)',
     r'deixe (?:o )?seu recado',
     r'deixe (?:a )?sua mensagem',
     r'ap[oó]s o sinal',
-    r'n[aã]o posso atender (?:no momento|agora)?',
+    r'n[aã]o (?:posso|pode) atender (?:no momento|agora)?',
     r'n[aã]o estou dispon[ií]vel',
-    r'grave seu recado',
+    r'grave (?:o |a )?(?:seu|sua) (?:recado|mensagem)',
     r'deixe seu nome e telefone',
     r'assistente de liga[cç][aã]o',
     r'deixe um recado ap[oó]s o bipe',
     r'sua mensagem ser[aá] enviada',
     r'correio de voz',
     r'recado de voz',
+    r'(?:por favor )?ligue mais tarde',
 ]
 
 # Padrões Fortes Dialógicos / Interrogativos de Fala Humana
@@ -98,7 +101,17 @@ class AMDClassifier:
                 "probas": {"silencio": 0.98, "humano": 0.02, "caixa_postal": 0.0, "operadora": 0.0}
             }
 
-        # 2. Padrão de Operadora
+        # 2. Padrão Explícito de Caixa Postal
+        for pat in COMPILED_CAIXA_POSTAL:
+            if pat.search(clean_text):
+                return {
+                    "label": "caixa_postal",
+                    "confidence": 0.95,
+                    "reason": f"regex_caixa_postal_match: {pat.pattern}",
+                    "probas": {"caixa_postal": 0.95, "humano": 0.05, "operadora": 0.0, "silencio": 0.0}
+                }
+
+        # 3. Padrão de Operadora
         for pat in COMPILED_OPERADORA:
             if pat.search(clean_text):
                 return {
@@ -115,16 +128,6 @@ class AMDClassifier:
                 "reason": "early_media_non_conclusive",
                 "probas": {"humano": 0.50, "operadora": 0.50, "caixa_postal": 0.0, "silencio": 0.0}
             }
-
-        # 3. Padrão Explícito de Caixa Postal
-        for pat in COMPILED_CAIXA_POSTAL:
-            if pat.search(clean_text):
-                return {
-                    "label": "caixa_postal",
-                    "confidence": 0.95,
-                    "reason": f"regex_caixa_postal_match: {pat.pattern}",
-                    "probas": {"caixa_postal": 0.95, "humano": 0.05, "operadora": 0.0, "silencio": 0.0}
-                }
 
         # 4. Se houver modelo de ML treinado, avalia antes das heurísticas genéricas quando a fala for longa
         if self.ml_pipeline is not None and len(clean_text) >= 3 and speech_ms > 1300:

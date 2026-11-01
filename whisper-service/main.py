@@ -87,6 +87,8 @@ async def audio_stream_endpoint(
     try:
         while True:
             data = await websocket.receive()
+            if data.get("type") == "websocket.disconnect":
+                break
 
             if "bytes" in data and data["bytes"]:
                 chunk = data["bytes"]

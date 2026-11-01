@@ -258,6 +258,12 @@ class WsMediaBridge {
       if (Buffer.isBuffer(raw)) {
         this.onAudio && this.onAudio(raw);
         return;
+      } else if (raw instanceof ArrayBuffer) {
+        this.onAudio && this.onAudio(Buffer.from(raw));
+        return;
+      } else if (Array.isArray(raw)) {
+        this.onAudio && this.onAudio(Buffer.concat(raw));
+        return;
       }
 
       const s = raw.toString();

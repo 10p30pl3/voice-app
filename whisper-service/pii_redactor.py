@@ -4,6 +4,7 @@ import re
 CPF_REGEX = re.compile(r'\b(?:\d{3}[\.\,\-\s]*\d{3}[\.\,\-\s]*\d{3}[\.\,\-\s]*\d{2}|\d{11})\b')
 CARD_REGEX = re.compile(r'\b(?:\d{4}[\.\,\-\s]*){3}\d{4}\b')
 PHONE_REGEX = re.compile(r'\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9\d{4}[\.\,\-\s]*\d{4}|\d{4}[\.\,\-\s]*\d{4})\b')
+EMAIL_REGEX = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
 
 def redact_pii(text: str) -> str:
     """
@@ -16,5 +17,7 @@ def redact_pii(text: str) -> str:
     redacted = CPF_REGEX.sub('***.***.***-**', text)
     # Redige número de cartão de crédito
     redacted = CARD_REGEX.sub('****-****-****-****', redacted)
+    # Redige Email
+    redacted = EMAIL_REGEX.sub('***@***.***', redacted)
     
     return redacted

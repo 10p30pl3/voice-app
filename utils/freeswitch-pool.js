@@ -123,6 +123,7 @@ class FreeSwitchPool {
           console.error(`[FreeSwitchPool] 🚨 Nó [${node.id}] desconectou! Marcando como offline e reconectando...`);
           node.ready = false;
           node.mediaserver = null;
+          node.activeCalls = 0; // Limpa contagem de chamadas ativas do nó desconectado para evitar chamadas fantasmas
           if (!this.isShuttingDown) {
             this.connectNode(node);
           }

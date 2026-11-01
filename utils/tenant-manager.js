@@ -93,9 +93,12 @@ class TenantManager {
     if (!req) return defaultTenant;
 
     const headerTenantId = req.get('X-Tenant-ID') || req.get('x-tenant-id');
-    if (headerTenantId && this.tenants.has(headerTenantId)) {
-      const t = this.tenants.get(headerTenantId);
-      if (t.active) return t;
+    if (headerTenantId) {
+      if (this.tenants.has(headerTenantId)) {
+        return this.tenants.get(headerTenantId);
+      }
+      console.warn(`[TenantManager] X-Tenant-ID desconhecido: ${headerTenantId}`);
+      return null;
     }
 
     const calledNumber = req.calledNumber || this.extractCalledNumber(req);

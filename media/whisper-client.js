@@ -61,7 +61,7 @@ class WhisperPool {
       }
     }
     const healthy = this.nodes.filter((n) => n.isHealthy);
-    if (healthy.length === 0) return this.nodes[0] || null;
+    if (healthy.length === 0) return null; // Retorna null para acionar Fail-Open imediato (0ms) sem travar chamadas
     if (healthy.length === 1) return healthy[0];
 
     let min = Infinity;
@@ -110,6 +110,7 @@ class WhisperSession extends EventEmitter {
     this.amdMode = (tenant.amd && tenant.amd.mode) || 'active';
     this.ws = null;
     this.node = null;
+    this.nodeId = null;
     this.decisionReceived = false;
     this.lastDecision = null;
     this.decisionPromise = null;
@@ -176,6 +177,7 @@ class WhisperSession extends EventEmitter {
       return;
     }
 
+    this.nodeId = this.node.id;
     this.node.activeSessions += 1;
 
     const urlObj = new URL(this.node.url);
@@ -244,7 +246,9 @@ class WhisperSession extends EventEmitter {
       });
 
       this.ws.on('error', (err) => {
-        console.warn(`[${this.callId}] ⚠️ Erro no WebSocket do Whisper [${this.node?.id}]:`, err.message);
+        if (!this.closed) {
+          console.warn(`[${this.callId}] ⚠️ Erro no WebSocket do Whisper [${this.nodeId}]:`, err.message);
+        }
         globalWhisperPool.markNodeUnhealthy(this.node, err.message);
         this._releaseNode();
         this.resolveDecisionOnce({ label: 'humano', confidence: 0.5, reason: 'whisper_ws_error' });

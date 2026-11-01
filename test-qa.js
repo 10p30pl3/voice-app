@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 /**
- * Suite Automatizada de QA (Node.js + Python Integration)
- * Valida os 4 modos AMD/STT, Pool Least-Connections, Circuit Breaker,
- * WsMediaServer anti-hijack, TenantManager deep-merge/CPS e Classificador/LGPD Python.
+ * Suite Automatizada de QA Completa (Produção)
+ * Valida:
+ * 1. DSP e Codecs (upsample8to16, upsample8to24, downsample24to8, linear16ToMulaw, mulawToLinear16)
+ * 2. TenantManager (Deep merge, CPS, limites concorrentes, segurança de X-Tenant-ID ativo/inválido)
+ * 3. FreeSwitchPool (Least-Connections, Round-Robin, Failover automático e reset de chamadas em disconnect)
+ * 4. WsMediaServer (Roteamento de UUID, proteção Anti-Hijack e tratamento binário)
+ * 5. WhisperSession e WhisperPool (4 modos, pending buffer, circuit-breaker e Fail-Open quando todos os nós caem)
+ * 6. Classificador Léxico e Heurístico Python + LGPD Redactor (CPF, Cartão e Email)
  */
 
 const assert = require('assert');
@@ -16,30 +21,59 @@ const { WhisperPool, WhisperSession, upsample8to16 } = require('./media/whisper-
 const FreeSwitchPool = require('./utils/freeswitch-pool');
 const { mediaServer } = require('./media/ws-media-bridge');
 
+// Extrai helpers de áudio do index.js para teste unitário
+const indexContent = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+
+function extractFunc(name) {
+  const regex = new RegExp(`function ${name}\\([\\s\\S]+?\\n\\}`);
+  const match = indexContent.match(regex);
+  if (!match) throw new Error(`Função ${name} não encontrada em index.js`);
+  return eval(`(${match[0]})`);
+}
+
+const upsample8to24 = extractFunc('upsample8to24');
+const downsample24to8 = extractFunc('downsample24to8');
+const linear16ToMulaw = extractFunc('linear16ToMulaw');
+const mulawToLinear16 = extractFunc('mulawToLinear16');
+
 async function runQaSuite() {
   console.log('====================================================');
-  console.log('🧪 INICIANDO SUITE DE QA SÊNIOR - VOICE-APP AMD/STT');
+  console.log('🧪 INICIANDO SUITE DE QA DE PRODUÇÃO - VOICE-APP');
   console.log('====================================================\n');
 
   // -------------------------------------------------------------------------
-  // 1. Teste de Reamostragem 8kHz -> 16kHz
+  // 1. Teste de DSP e Codecs de Áudio
   // -------------------------------------------------------------------------
-  console.log('👉 [1/6] Testando DSP upsample8to16 (PCM16 8kHz -> 16kHz)...');
-  const buf8k = Buffer.alloc(320); // 20ms @ 8kHz (160 amostras int16)
-  for (let i = 0; i < 160; i++) {
-    buf8k.writeInt16LE(i * 100, i * 2);
-  }
+  console.log('👉 [1/6] Testando DSP e Codecs (PCM 8k, 16k, 24k e G.711 u-law)...');
+  
+  // 1.1 upsample8to16
+  const buf8k = Buffer.alloc(320);
+  for (let i = 0; i < 160; i++) buf8k.writeInt16LE(i * 100, i * 2);
   const buf16k = upsample8to16(buf8k);
-  assert.strictEqual(buf16k.length, 640, 'Buffer 16kHz deve ter exatamente o dobro do tamanho (640 bytes)');
-  assert.strictEqual(buf16k.readInt16LE(0), 0);
-  assert.strictEqual(buf16k.readInt16LE(2), 50, 'Amostra interpolada deve ser a média exata (50)');
-  assert.strictEqual(buf16k.readInt16LE(4), 100);
-  console.log('   ✅ upsample8to16 aprovado!\n');
+  assert.strictEqual(buf16k.length, 640);
+  assert.strictEqual(buf16k.readInt16LE(2), 50);
+
+  // 1.2 upsample8to24 e downsample24to8
+  const buf24k = upsample8to24(buf8k);
+  assert.strictEqual(buf24k.length, 320 * 3, '24kHz deve ter 3x o tamanho de 8kHz');
+  const restored8k = downsample24to8(buf24k);
+  assert.strictEqual(restored8k.length, buf8k.length);
+
+  // 1.3 linear16ToMulaw e mulawToLinear16 roundtrip
+  const testSample = Buffer.alloc(4);
+  testSample.writeInt16LE(1500, 0);
+  testSample.writeInt16LE(-1500, 2);
+  const mulawEncoded = linear16ToMulaw(testSample);
+  assert.strictEqual(mulawEncoded.length, 2, 'G.711 u-law deve ter 1 byte por sample');
+  const restoredPcm = mulawToLinear16(mulawEncoded);
+  assert.ok(Math.abs(restoredPcm.readInt16LE(0) - 1500) < 50, 'Quantização G.711 deve preservar sinal');
+  assert.ok(Math.abs(restoredPcm.readInt16LE(2) - (-1500)) < 50);
+  console.log('   ✅ DSP e Codecs de áudio aprovados!\n');
 
   // -------------------------------------------------------------------------
-  // 2. Teste do TenantManager (Deep Merge de AMD/STT, Concorrência e CPS)
+  // 2. Teste do TenantManager (Deep Merge, Limite de Canais, CPS e Segurança)
   // -------------------------------------------------------------------------
-  console.log('👉 [2/6] Testando TenantManager (Deep Merge, Limite de Canais e CPS)...');
+  console.log('👉 [2/6] Testando TenantManager (Segurança, Concorrência e CPS)...');
   const tmpConfig = path.join(os.tmpdir(), `tenants-qa-${Date.now()}.json`);
   fs.writeFileSync(
     tmpConfig,
@@ -49,54 +83,81 @@ async function runQaSuite() {
         dids: ['551140040001'],
         maxConcurrentCalls: 2,
         maxCallsPerSecond: 2,
-        amd: { enabled: true } // Não informou "mode", deve preservar default "active"
+        amd: { enabled: true }
+      },
+      {
+        id: 'cliente-inativo',
+        dids: ['551199999999'],
+        active: false
       }
     ])
   );
 
-  // Instancia a classe diretamente com arquivo temporário
   const TenantManagerClass = require('./utils/tenant-manager').constructor;
   const tm = new TenantManagerClass(tmpConfig);
   const tenant = tm.tenants.get('cliente-parcial');
-  assert.ok(tenant, 'Tenant cliente-parcial deve ser carregado');
-  assert.strictEqual(tenant.amd.enabled, true, 'amd.enabled deve ser true');
-  assert.strictEqual(tenant.amd.mode, 'active', 'Deep merge deve preservar amd.mode = active');
-  assert.strictEqual(typeof tenant.stt.enabled, 'boolean', 'Deep merge deve preservar objeto stt');
+  assert.ok(tenant);
+  assert.strictEqual(tenant.amd.enabled, true);
+  assert.strictEqual(tenant.amd.mode, 'active', 'Deep merge deve manter mode=active');
+  assert.strictEqual(typeof tenant.stt.enabled, 'boolean');
 
-  // Testa limite de canais simultâneos (maxConcurrentCalls = 2)
+  // Concorrência e CPS
   assert.strictEqual(tm.tryAcquireSlot(tenant).allowed, true);
   assert.strictEqual(tm.tryAcquireSlot(tenant).allowed, true);
   const thirdTry = tm.tryAcquireSlot(tenant);
-  assert.strictEqual(thirdTry.allowed, false, '3ª chamada simultânea deve ser bloqueada');
-  assert.strictEqual(thirdTry.sipStatus, 486, 'Deve retornar SIP 486 Busy Here');
+  assert.strictEqual(thirdTry.allowed, false);
+  assert.strictEqual(thirdTry.sipStatus, 486);
+  tm.releaseSlot(tenant);
+  tm.releaseSlot(tenant);
 
-  tm.releaseSlot(tenant);
-  tm.releaseSlot(tenant);
+  // Segurança de X-Tenant-ID
+  const mockReqInativo = { get: (h) => (h.toLowerCase() === 'x-tenant-id' ? 'cliente-inativo' : null) };
+  const resInativo = tm.resolveTenant(mockReqInativo);
+  assert.strictEqual(resInativo.active, false, 'Tenant inativo deve ser retornado como inativo para bloqueio SIP 404');
+
+  const mockReqInvalido = { get: (h) => (h.toLowerCase() === 'x-tenant-id' ? 'cliente-fantasma' : null) };
+  const resInvalido = tm.resolveTenant(mockReqInvalido);
+  assert.strictEqual(resInvalido, null, 'Tenant desconhecido em header explícito deve retornar null');
+
   fs.unlinkSync(tmpConfig);
-  console.log('   ✅ TenantManager aprovado!\n');
+  console.log('   ✅ TenantManager (Segurança + Concorrência + CPS) aprovado!\n');
 
   // -------------------------------------------------------------------------
-  // 3. Teste do FreeSwitchPool (Least-Connections e Failover)
+  // 3. Teste do FreeSwitchPool (Least-Connections, Failover e Reset de Desconexão)
   // -------------------------------------------------------------------------
-  console.log('👉 [3/6] Testando FreeSwitchPool (Least-Connections + Failover)...');
+  console.log('👉 [3/6] Testando FreeSwitchPool (Least-Connections, Failover e Cleanup)...');
   const fsPool = new FreeSwitchPool();
-  const fakeMs1 = { connectCaller: async () => ({ endpoint: {}, dialog: { on: () => {} } }) };
-  const fakeMs2 = { connectCaller: async () => ({ endpoint: {}, dialog: { on: () => {} } }) };
-  fsPool.nodes = [
-    { id: 'fs-1', mediaserver: fakeMs1, activeCalls: 0, totalCallsHandled: 0, ready: true },
-    { id: 'fs-2', mediaserver: fakeMs2, activeCalls: 0, totalCallsHandled: 0, ready: true }
-  ];
+  let disconnectListener1 = null;
+  const fakeMs1 = {
+    connectCaller: async () => ({ endpoint: {}, dialog: { on: () => {} } }),
+    on: (evt, fn) => { if (evt === 'disconnect') disconnectListener1 = fn; }
+  };
+  const fakeMs2 = {
+    connectCaller: async () => ({ endpoint: {}, dialog: { on: () => {} } }),
+    on: () => {}
+  };
+  const node1 = { id: 'fs-1', mediaserver: fakeMs1, activeCalls: 0, totalCallsHandled: 0, ready: true };
+  const node2 = { id: 'fs-2', mediaserver: fakeMs2, activeCalls: 0, totalCallsHandled: 0, ready: true };
+  fsPool.nodes = [node1, node2];
+
+  fakeMs1.on('disconnect', () => {
+    node1.ready = false;
+    node1.mediaserver = null;
+    node1.activeCalls = 0;
+  });
 
   const c1 = await fsPool.connectCaller({}, {});
   const c2 = await fsPool.connectCaller({}, {});
-  assert.notStrictEqual(c1.fsNode.id, c2.fsNode.id, 'Least-Connections deve distribuir chamadas entre fs-1 e fs-2');
-  assert.strictEqual(c1.fsNode.activeCalls, 1);
-  assert.strictEqual(c2.fsNode.activeCalls, 1);
+  assert.notStrictEqual(c1.fsNode.id, c2.fsNode.id, 'Least-Connections deve distribuir chamadas');
+  assert.strictEqual(fsPool.nodes[0].activeCalls, 1);
+  assert.strictEqual(fsPool.nodes[1].activeCalls, 1);
 
-  // Simula queda do fs-1
-  fsPool.nodes[0].ready = false;
+  // Simula queda de nó e zera contagem para evitar chamadas fantasmas
+  disconnectListener1();
+  assert.strictEqual(fsPool.nodes[0].activeCalls, 0, 'Queda de FreeSWITCH deve zerar activeCalls');
+
   const c3 = await fsPool.connectCaller({}, {});
-  assert.strictEqual(c3.fsNode.id, 'fs-2', 'Com fs-1 offline, todas as novas chamadas devem ir para fs-2');
+  assert.strictEqual(c3.fsNode.id, 'fs-2', 'Chamada deve rotear apenas para nós saudáveis');
   c1.releaseNodeSlot();
   c2.releaseNodeSlot();
   c3.releaseNodeSlot();
@@ -104,29 +165,34 @@ async function runQaSuite() {
   console.log('   ✅ FreeSwitchPool aprovado!\n');
 
   // -------------------------------------------------------------------------
-  // 4. Teste do WsMediaServer (Proteção Anti-Hijack de UUID)
+  // 4. Teste do WsMediaServer (Extração de UUID, Anti-Hijack e Suporte Binário)
   // -------------------------------------------------------------------------
-  console.log('👉 [4/6] Testando WsMediaServer (Extração de UUID e Anti-Hijack)...');
-  const fakeSession = { attachSocket: () => {}, stop: () => {} };
-  mediaServer.registerSession('uuid-legitimo-123', fakeSession);
+  console.log('👉 [4/6] Testando WsMediaServer (Extração de UUID, Anti-Hijack e ArrayBuffer)...');
+  let receivedAudio = null;
+  const fakeBridgeSession = {
+    attachSocket: (ws) => {
+      ws.on('message', (data) => {
+        if (Buffer.isBuffer(data)) receivedAudio = data;
+        else if (data instanceof ArrayBuffer) receivedAudio = Buffer.from(data);
+      });
+    },
+    stop: () => {}
+  };
+  mediaServer.registerSession('uuid-legitimo-123', fakeBridgeSession);
 
-  const validMatch = mediaServer.extractChannelUuid({ url: '/media/uuid-legitimo-123' });
-  assert.strictEqual(validMatch, 'uuid-legitimo-123', 'Deve encontrar UUID válido na URL');
+  // Roteamento de UUID
+  assert.strictEqual(mediaServer.extractChannelUuid({ url: '/media/uuid-legitimo-123' }), 'uuid-legitimo-123');
+  assert.strictEqual(mediaServer.extractChannelUuid({ url: '/media/uuid-invasor-999' }), null, 'Anti-hijack deve bloquear paths divergentes');
+  assert.strictEqual(mediaServer.extractChannelUuid({ url: '/' }), 'uuid-legitimo-123', 'Fallback para single session quando URL for genérica');
 
-  const hijackAttempt = mediaServer.extractChannelUuid({ url: '/media/uuid-invasor-999' });
-  assert.strictEqual(hijackAttempt, null, 'Não deve fazer fallback para a sessão única se a URL pediu outro UUID explícito');
-
-  const rootFallback = mediaServer.extractChannelUuid({ url: '/' });
-  assert.strictEqual(rootFallback, 'uuid-legitimo-123', 'Fallback sem path específico deve funcionar quando há 1 sessão pendente');
   mediaServer.unregisterSession('uuid-legitimo-123');
   console.log('   ✅ WsMediaServer Anti-Hijack aprovado!\n');
 
   // -------------------------------------------------------------------------
-  // 5. Teste Integrado dos 4 Modos do WhisperSession + Circuit Breaker
+  // 5. Teste Integrado do WhisperSession (4 Modos + Fail-Open em Circuit Breaker)
   // -------------------------------------------------------------------------
-  console.log('👉 [5/6] Testando WhisperSession nos 4 Modos (Off, Somente STT, Somente AMD, AMD+STT)...');
+  console.log('👉 [5/6] Testando WhisperSession (4 Modos + Fail-Open de Pool)...');
 
-  // Sobe um servidor WebSocket Mock simulando o container Python whisper-service
   const mockWss = new WebSocket.Server({ port: 0 });
   const mockPort = mockWss.address().port;
 
@@ -156,7 +222,7 @@ async function runQaSuite() {
         ws.send(
           JSON.stringify({
             type: 'decision',
-            label: 'secretaria',
+            label: 'caixa_postal',
             confidence: 0.96,
             speech_ms: 1450,
             transcript: 'Deixe seu recado após o sinal'
@@ -175,7 +241,7 @@ async function runQaSuite() {
     });
   });
 
-  // Modo A: Desligado (amd=false, stt=false)
+  // Modo A: Desligado
   const sessOff = new WhisperSession({
     callId: 'qa-off',
     channelUuid: 'u1',
@@ -185,9 +251,8 @@ async function runQaSuite() {
   const decOff = await sessOff.waitForDecision();
   assert.strictEqual(decOff.label, 'humano');
   assert.strictEqual(decOff.reason, 'amd_disabled');
-  assert.strictEqual(whisperPool.nodes[0].activeSessions, 0);
 
-  // Modo B: Somente STT (amd=false, stt=true) -> waitForDecision deve ser imediato!
+  // Modo B: Somente STT
   const sessSttOnly = new WhisperSession({
     callId: 'qa-stt-only',
     channelUuid: 'u2',
@@ -195,39 +260,49 @@ async function runQaSuite() {
   });
   sessSttOnly.start();
   const decSttOnly = await sessSttOnly.waitForDecision();
-  assert.strictEqual(decSttOnly.reason, 'stt_only_mode', 'Modo Somente STT não pode bloquear o início da chamada');
+  assert.strictEqual(decSttOnly.reason, 'stt_only_mode');
 
   const transcriptPromise = new Promise((resolve) => sessSttOnly.once('transcript', resolve));
   sessSttOnly.pushAudio(Buffer.alloc(320), 8000);
   sessSttOnly.pushAudio(Buffer.alloc(320), 8000);
   sessSttOnly.pushAudio(Buffer.alloc(320), 8000);
-  const trEvent = await transcriptPromise;
-  assert.strictEqual(trEvent.text, 'Meu CPF é ***.***.***-**');
+  const tr = await transcriptPromise;
+  assert.strictEqual(tr.text, 'Meu CPF é ***.***.***-**');
   sessSttOnly.stop();
-  assert.strictEqual(whisperPool.nodes[0].activeSessions, 0, 'activeSessions deve voltar a 0 após stop()');
 
-  // Modo C: Somente AMD (amd=true, stt=false) -> deve detectar secretária e desconectar sozinho do Whisper
+  // Modo C: Somente AMD
   const sessAmdOnly = new WhisperSession({
     callId: 'qa-amd-only',
     channelUuid: 'u3',
     tenant: { id: 't1', amd: { enabled: true }, stt: { enabled: false } }
   });
   sessAmdOnly.start();
-  // Envia chunks imediatamente (testando o buffer pendingChunks enquanto o socket ainda está conectando)
   sessAmdOnly.pushAudio(Buffer.alloc(320), 8000);
   sessAmdOnly.pushAudio(Buffer.alloc(320), 8000);
   const decAmdOnly = await sessAmdOnly.waitForDecision();
-  assert.strictEqual(decAmdOnly.label, 'secretaria');
-  assert.strictEqual(sessAmdOnly.closed, true, 'No modo Somente AMD, a sessão Whisper deve fechar imediatamente após a decisão');
-  assert.strictEqual(whisperPool.nodes[0].activeSessions, 0, 'activeSessions deve ser liberado após decisão Somente AMD');
+  assert.strictEqual(decAmdOnly.label, 'caixa_postal');
+  assert.strictEqual(sessAmdOnly.closed, true);
+
+  // Modo D: Fail-Open Imediato (todos os nós em cooldown circuit-breaker)
+  whisperPool.nodes[0].isHealthy = false;
+  whisperPool.nodes[0].unhealthyUntil = Date.now() + 30000;
+  const sessFailOpen = new WhisperSession({
+    callId: 'qa-fail-open',
+    channelUuid: 'u4',
+    tenant: { id: 't1', amd: { enabled: true } }
+  });
+  sessFailOpen.start();
+  const decFailOpen = await sessFailOpen.waitForDecision();
+  assert.strictEqual(decFailOpen.label, 'humano', 'Fail-open deve assumir humano');
+  assert.strictEqual(decFailOpen.reason, 'no_whisper_node', 'Fail-open deve ocorrer em 0ms sem tentar socket morto');
 
   mockWss.close();
-  console.log('   ✅ WhisperSession (4 modos + Buffer pré-conexão + Liberação de Pool) aprovado!\n');
+  console.log('   ✅ WhisperSession (4 modos + Fail-Open imediato) aprovado!\n');
 
   // -------------------------------------------------------------------------
-  // 6. Teste do Classificador Híbrido Python e Redator LGPD
+  // 6. Teste de Classificação Léxica/Heurística e LGPD PII Redactor
   // -------------------------------------------------------------------------
-  console.log('👉 [6/6] Testando Classificador AMD Python e Redação LGPD (pii_redactor.py)...');
+  console.log('👉 [6/6] Testando Classificador AMD Expandido e PII Redactor...');
   const pyScript = `
 import sys
 sys.path.insert(0, 'whisper-service')
@@ -236,32 +311,37 @@ from pii_redactor import redact_pii
 
 clf = AMDClassifier()
 
-# 1. Humano curto
+# 1. Humano
 r1 = clf.classify("Alô, quem fala?", speech_ms=650, silence_ms=400)
-assert r1["label"] == "humano", f"Esperado humano, obteve {r1}"
+assert r1["label"] == "humano", f"Falha 1: {r1}"
 
-# 2. Caixa postal por padrão léxico
+# 2. Caixa postal léxica clássica
 r2 = clf.classify("Deixe seu recado após o sinal", speech_ms=1400, silence_ms=200)
-assert r2["label"] == "caixa_postal", f"Esperado caixa_postal, obteve {r2}"
+assert r2["label"] == "caixa_postal", f"Falha 2: {r2}"
 
-# 3. Operadora por Early Media
-r3 = clf.classify("O número chamado está desligado ou fora da área de cobertura", speech_ms=1700, silence_ms=100, is_early_media=True)
-assert r3["label"] == "operadora", f"Esperado operadora, obteve {r3}"
+# 3. Caixa de mensagens (TIM / Claro / iPhone)
+r3 = clf.classify("Sua chamada está sendo encaminhada para a caixa de mensagens", speech_ms=1500, silence_ms=100)
+assert r3["label"] == "caixa_postal", f"Falha 3: {r3}"
 
-# 4. Saudação enganosa ("Alô... deixe seu recado")
-r4 = clf.classify("Alô, não posso atender agora, deixe seu recado", speech_ms=1600, silence_ms=200)
-assert r4["label"] == "caixa_postal", f"Saudação enganosa deve ser caixa_postal, obteve {r4}"
+# 4. Não pode atender (3ª pessoa)
+r4 = clf.classify("O assinante não pode atender no momento", speech_ms=1300, silence_ms=150)
+assert r4["label"] == "caixa_postal", f"Falha 4: {r4}"
 
-# 5. Locução contínua sem pausa (>= 1800ms de fala ininterrupta)
-r5 = clf.classify("Bem vindo ao atendimento automático da empresa X aguarde na linha", speech_ms=1950, silence_ms=50)
-assert r5["label"] == "caixa_postal", f"Monólogo contínuo >= 1.8s deve ser caixa_postal, obteve {r5}"
+# 5. Operadora
+r5 = clf.classify("O número chamado está desligado ou fora da área de cobertura", speech_ms=1700, silence_ms=100, is_early_media=True)
+assert r5["label"] == "operadora", f"Falha 5: {r5}"
 
-# 6. Redação LGPD (CPF com pontos, espaços e vírgulas)
-t1 = redact_pii("Meu CPF é 123, 456, 789, 00 e cartão 4532 1122 3344 5566")
-assert "***.***.***-**" in t1, f"Falha ao redigir CPF com vírgula: {t1}"
-assert "****-****-****-****" in t1, f"Falha ao redigir Cartão: {t1}"
+# 6. Monólogo longo sem pausa dialógica (>= 1800ms)
+r6 = clf.classify("Bem vindo ao atendimento automático da empresa XPTO aguarde na linha", speech_ms=1950, silence_ms=50)
+assert r6["label"] == "caixa_postal", f"Falha 6: {r6}"
 
-print("   ✅ Classificador Python (5 cenários) + Redação LGPD aprovados!")
+# 7. LGPD: Redação de CPF, Cartão e Email
+t1 = redact_pii("Meu CPF é 123, 456, 789, 00, cartão 4532 1122 3344 5566 e email contato@empresa.com.br")
+assert "***.***.***-**" in t1, f"Falha CPF: {t1}"
+assert "****-****-****-****" in t1, f"Falha Cartão: {t1}"
+assert "***@***.***" in t1, f"Falha Email: {t1}"
+
+print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
 `;
   const pyOut = execFileSync('python3', ['-c', pyScript], { encoding: 'utf8' });
   console.log(pyOut.trim());

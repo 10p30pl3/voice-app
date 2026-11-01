@@ -95,7 +95,10 @@ class PriorityInferenceWorker:
                 await asyncio.sleep(0.005)
                 continue
 
-            await asyncio.sleep(self.micro_batch_window_sec)
+            # Se houver tarefa de AMD prioritária (P0) pronta, usa micro-janela ultrarrápida (10ms)
+            has_p0 = any(t.priority == 0 for t in self.queue)
+            batch_wait = 0.010 if has_p0 else self.micro_batch_window_sec
+            await asyncio.sleep(batch_wait)
 
             async with self.lock:
                 batch_tasks = self.queue[:self.max_batch_size]
@@ -122,6 +125,8 @@ class PriorityInferenceWorker:
                         task.future.set_exception(e)
 
     def _transcribe_single(self, task: BatchTask) -> str:
+        if task.audio_np is None or len(task.audio_np) < 800:
+            return ""
         try:
             segments, _ = self.model.transcribe(
                 task.audio_np,
