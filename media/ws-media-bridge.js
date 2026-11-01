@@ -35,10 +35,29 @@ class WsMediaServer {
     this.sessions = new Map(); // channelUuid -> WsMediaBridge
     this.pendingConnections = new Set();
     this.healthCallback = null;
+    this.apiHandler = null;
   }
 
   setHealthCallback(fn) {
     this.healthCallback = fn;
+  }
+
+  setApiHandler(fn) {
+    this.apiHandler = fn;
+  }
+
+  getHealthObject() {
+    const extraHealth = this.healthCallback ? this.healthCallback() : {};
+    return {
+      status: 'ok',
+      workerId: WORKER_ID,
+      pid: process.pid,
+      uptime: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      activeCallsInWorker: this.sessions.size,
+      mediaPort: this.port,
+      ...extraHealth
+    };
   }
 
   async listen(requestedPort = null) {
@@ -49,21 +68,24 @@ class WsMediaServer {
     let candidatePort = basePort > 0 ? basePort + WORKER_ID : 0;
 
     this.listenPromise = new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => {
+      this.server = http.createServer(async (req, res) => {
         if (req.url === '/health' || req.url === '/healthz') {
-          const extraHealth = this.healthCallback ? this.healthCallback() : {};
-          const status = {
-            status: 'ok',
-            workerId: WORKER_ID,
-            pid: process.pid,
-            uptime: Math.floor(process.uptime()),
-            timestamp: new Date().toISOString(),
-            activeCallsInWorker: this.sessions.size,
-            mediaPort: this.port,
-            ...extraHealth
-          };
+          const status = this.getHealthObject();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify(status, null, 2));
+        }
+
+        if (this.apiHandler) {
+          try {
+            const handled = await this.apiHandler(req, res);
+            if (handled) return;
+          } catch (err) {
+            if (!res.headersSent) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'internal_error', message: err.message }));
+            }
+            return;
+          }
         }
 
         res.writeHead(200, { 'Content-Type': 'text/plain' });

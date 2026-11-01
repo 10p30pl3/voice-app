@@ -184,6 +184,81 @@ class TenantManager {
     return stats;
   }
 
+  listTenants() {
+    const result = [];
+    for (const [id, t] of this.tenants.entries()) {
+      const maskedKey = t.openaiApiKey
+        ? `${t.openaiApiKey.slice(0, 7)}...${t.openaiApiKey.slice(-4)}`
+        : null;
+      result.push({
+        ...t,
+        openaiApiKey: maskedKey,
+        activeCalls: this.activeCallsPerTenant.get(id) || 0
+      });
+    }
+    return result;
+  }
+
+  upsertTenant(data) {
+    if (!data || !data.id) {
+      throw new Error('O campo "id" do tenant é obrigatório');
+    }
+    const defaultTenant = this.getDefaultTenant();
+    const existing = this.tenants.get(data.id) || defaultTenant;
+    const merged = {
+      ...defaultTenant,
+      ...existing,
+      ...data,
+      amd: {
+        ...defaultTenant.amd,
+        ...(existing.amd || {}),
+        ...(data.amd || {})
+      },
+      stt: {
+        ...defaultTenant.stt,
+        ...(existing.stt || {}),
+        ...(data.stt || {})
+      },
+      dtmf: {
+        ...defaultTenant.dtmf,
+        ...(existing.dtmf || {}),
+        ...(data.dtmf || {})
+      },
+      active: data.active !== undefined ? Boolean(data.active) : existing.active !== false
+    };
+    this.tenants.set(data.id, merged);
+    this.persistToDisk();
+    return merged;
+  }
+
+  deleteTenant(id) {
+    if (!id || id === 'default') {
+      throw new Error('Não é permitido remover o tenant default');
+    }
+    const deleted = this.tenants.delete(id);
+    if (deleted) {
+      this.persistToDisk();
+    }
+    return deleted;
+  }
+
+  persistToDisk() {
+    try {
+      const dir = path.dirname(this.configPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const list = [];
+      for (const [id, t] of this.tenants.entries()) {
+        if (id === 'default') continue;
+        list.push(t);
+      }
+      fs.writeFileSync(this.configPath, JSON.stringify(list, null, 2), 'utf8');
+    } catch (err) {
+      console.warn(`[TenantManager] Aviso: não foi possível persistir tenants em disco:`, err.message);
+    }
+  }
+
   extractCalledNumber(req) {
     try {
       const toHeader = req.get('To');

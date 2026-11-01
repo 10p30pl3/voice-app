@@ -214,6 +214,61 @@ class FreeSwitchPool {
   }
 
   /**
+   * Origina uma chamada ativa (Outbound SIP INVITE) usando a instância de FreeSWITCH menos carregada
+   */
+  async originateCall(srf, { to, from, headers = {} }) {
+    const node = this.selectBestNode();
+    if (!node) {
+      throw new Error('Nenhuma instância do FreeSWITCH disponível para originar chamada');
+    }
+
+    node.activeCalls += 1;
+    node.totalCallsHandled += 1;
+
+    let endpoint = null;
+    try {
+      endpoint = await node.mediaserver.createEndpoint();
+      const sipUri = to.startsWith('sip:') ? to : `sip:${to}`;
+      const dialog = await srf.createUAC(sipUri, {
+        localSdp: endpoint.local.sdp,
+        callingNumber: from,
+        headers
+      });
+
+      await endpoint.modify(dialog.remote.sdp);
+
+      let released = false;
+      const releaseNodeSlot = () => {
+        if (released) return;
+        released = true;
+        node.activeCalls = Math.max(0, node.activeCalls - 1);
+      };
+
+      dialog.on('destroy', () => {
+        releaseNodeSlot();
+        try {
+          endpoint.destroy();
+        } catch {}
+      });
+
+      return {
+        endpoint,
+        dialog,
+        fsNode: node,
+        releaseNodeSlot
+      };
+    } catch (err) {
+      node.activeCalls = Math.max(0, node.activeCalls - 1);
+      if (endpoint) {
+        try {
+          endpoint.destroy();
+        } catch {}
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Retorna métricas detalhadas do cluster FreeSWITCH para o /health
    */
   getPoolStats() {

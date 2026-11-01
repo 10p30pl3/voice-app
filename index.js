@@ -25,8 +25,9 @@ const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
 const tenantManager = require('./utils/tenant-manager');
 const FreeSwitchPool = require('./utils/freeswitch-pool');
-const { WhisperSession } = require('./media/whisper-client');
+const { WhisperSession, whisperPool } = require('./media/whisper-client');
 const { CallRecorder, formatDateTime } = require('./utils/call-recorder');
+const { createApiRouter } = require('./utils/api-router');
 
 const srf = new Srf();
 const mrf = new Mrf(srf);
@@ -222,6 +223,12 @@ class OpenAIS2SBridge {
     this.recorder = null;
     this.dtmfBuffer = '';
     this.dtmfTimer = null;
+    this.startedAt = null;
+    this.caller = null;
+    this.called = null;
+    this.isMuted = false;
+    this.isOnHold = false;
+    this.transcriptLog = [];
 
     this.handleEslEvent = this.handleEslEvent.bind(this);
     this.handleDtmf = this.handleDtmf.bind(this);
@@ -334,11 +341,7 @@ class OpenAIS2SBridge {
         body.transcript
       ) {
         if (this.whisperSession && this.whisperSession.isSttEnabled) {
-          if (this.recorder) {
-            this.recorder.addTranscript('Atendente', body.transcript);
-          } else {
-            console.log(`[${this.callId}] 📝 [${formatDateTime()}] Atendente: ${body.transcript}`);
-          }
+          this.recordTranscriptTurn('Atendente', body.transcript);
         }
       }
 
@@ -421,11 +424,7 @@ class OpenAIS2SBridge {
     console.log(`[${this.callId}] 🔢 [DTMF FLUSH] Sequência completa enviada à IA: "${digits}"`);
 
     if (this.whisperSession && this.whisperSession.isSttEnabled) {
-      if (this.recorder) {
-        this.recorder.addTranscript('Cliente', `[DTMF: ${digits}]`);
-      } else {
-        console.log(`[${this.callId}] 📝 [${formatDateTime()}] Cliente: [DTMF: ${digits}]`);
-      }
+      this.recordTranscriptTurn('Cliente', `[DTMF: ${digits}]`);
     }
 
     if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
@@ -448,10 +447,13 @@ class OpenAIS2SBridge {
     }
   }
 
-  async start({ callId, endpoint, dialog }) {
+  async start({ callId, endpoint, dialog, caller = null, called = null }) {
     this.callId = callId;
     this.endpoint = endpoint;
     this.dialog = dialog;
+    this.caller = caller;
+    this.called = called;
+    this.startedAt = new Date();
     this.channelUuid = getChannelUuid(endpoint);
 
     if (!this.channelUuid) {
@@ -500,11 +502,7 @@ class OpenAIS2SBridge {
       });
 
       this.whisperSession.on('transcript', (stt) => {
-        if (this.recorder) {
-          this.recorder.addTranscript('Cliente', stt.text);
-        } else {
-          console.log(`[${this.callId}] 📝 [${formatDateTime()}] Cliente: ${stt.text}`);
-        }
+        this.recordTranscriptTurn('Cliente', stt.text);
       });
 
       this.whisperSession.start();
@@ -757,6 +755,227 @@ class OpenAIS2SBridge {
     );
   }
 
+  recordTranscriptTurn(speaker, text) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return null;
+
+    if (this.recorder && !this.recorder.isStopped && !this.recorder.isPaused) {
+      const entry = this.recorder.addTranscript(speaker, cleanText);
+      if (entry) {
+        this.transcriptLog.push(entry);
+        return entry;
+      }
+    }
+
+    const role = speaker === 'Atendente' ? 'Atendente' : 'Cliente';
+    const timestamp = formatDateTime();
+    const formatted = `[${timestamp}] ${role}: ${cleanText}`;
+    const entry = { timestamp, speaker: role, text: cleanText, formatted };
+    this.transcriptLog.push(entry);
+    console.log(`[${this.callId}] 📝 ${formatted}`);
+    return entry;
+  }
+
+  getCallInfo(includeTranscript = false) {
+    const durationSec = this.startedAt ? Math.floor((Date.now() - this.startedAt.getTime()) / 1000) : 0;
+    const info = {
+      callId: this.callId,
+      channelUuid: this.channelUuid,
+      tenantId: this.tenant?.id || 'default',
+      caller: this.caller,
+      called: this.called,
+      startedAt: this.startedAt ? this.startedAt.toISOString() : null,
+      durationSec,
+      codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
+      deviceMode: this.deviceMode,
+      noiseProfile: this.currentProfile,
+      isAgentTalking: this.isAgentTalking,
+      isMuted: this.isMuted,
+      isOnHold: this.isOnHold,
+      openaiConnected: this.openaiConnected,
+      amdEnabled: !!(this.whisperSession && this.whisperSession.isAmdEnabled),
+      sttEnabled: !!(this.whisperSession && this.whisperSession.isSttEnabled),
+      recordingActive: !!(this.recorder && this.recorder.isStarted && !this.recorder.isStopped && !this.recorder.isPaused),
+      recordingPaused: !!(this.recorder && this.recorder.isPaused),
+      recordingFile: this.recorder ? this.recorder.fileName : null,
+      transcriptFile: this.recorder ? this.recorder.transcriptFileName : null,
+      transcriptTurnsCount: this.transcriptLog.length
+    };
+
+    if (includeTranscript) {
+      info.transcript = this.transcriptLog;
+    }
+    return info;
+  }
+
+  interruptAgent() {
+    this.isAgentTalking = false;
+    this.mediaBridge.killAudio();
+    if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+      this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
+    }
+    if (this.endpoint && this.channelUuid) {
+      this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
+      this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
+    }
+  }
+
+  say(text, { role = 'user', interrupt = true, triggerResponse = true, instructions = null } = {}) {
+    if (interrupt && this.isAgentTalking) {
+      this.interruptAgent();
+    }
+    if (!this.openaiSocket || this.openaiSocket.readyState !== WebSocket.OPEN) {
+      throw new Error('Sessão OpenAI Realtime não está conectada');
+    }
+
+    const validRole = ['user', 'system', 'assistant'].includes(role) ? role : 'user';
+    this.openaiSocket.send(
+      JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: validRole,
+          content: [
+            {
+              type: 'input_text',
+              text: String(text)
+            }
+          ]
+        }
+      })
+    );
+
+    if (triggerResponse) {
+      const respPayload = { type: 'response.create' };
+      if (instructions) {
+        respPayload.response = { instructions: String(instructions) };
+      }
+      this.openaiSocket.send(JSON.stringify(respPayload));
+    }
+
+    return { role: validRole, interrupt, triggerResponse };
+  }
+
+  async transfer(target, { mode = 'blind', dialplan = 'XML', context = 'default' } = {}) {
+    if (mode === 'refer' && this.dialog && typeof this.dialog.request === 'function') {
+      const referTo = target.startsWith('sip:') || target.startsWith('<sip:') ? target : `<sip:${target}>`;
+      await this.dialog.request({
+        method: 'REFER',
+        headers: {
+          'Refer-To': referTo
+        }
+      });
+      return { mode: 'refer', target: referTo };
+    }
+
+    if (!this.endpoint || !this.channelUuid) {
+      throw new Error('Canal FreeSWITCH indisponível para transferência');
+    }
+    const cleanTarget = String(target).replace(/[^a-zA-Z0-9_+*#@.-]/g, '');
+    await this.endpoint.api(`uuid_transfer ${this.channelUuid} ${cleanTarget} ${dialplan} ${context}`);
+    return { mode: 'blind', target: cleanTarget, dialplan, context };
+  }
+
+  async sendDtmf(digits, direction = 'outbound') {
+    const cleanDigits = String(digits).replace(/[^0-9A-D*#wW]/g, '');
+    if (!cleanDigits) {
+      throw new Error('Nenhum dígito DTMF válido informado');
+    }
+
+    if (direction === 'inbound') {
+      for (const ch of cleanDigits) {
+        this.handleDtmf({ dtmf: ch });
+      }
+      this.flushDtmfBuffer();
+      return { direction: 'inbound', digits: cleanDigits };
+    }
+
+    if (!this.endpoint || !this.channelUuid) {
+      throw new Error('Canal FreeSWITCH indisponível para envio de DTMF');
+    }
+    await this.endpoint.api(`uuid_send_dtmf ${this.channelUuid} ${cleanDigits}`);
+    return { direction: 'outbound', digits: cleanDigits };
+  }
+
+  async playAudioFile(file) {
+    if (!this.endpoint) {
+      throw new Error('Endpoint FreeSWITCH indisponível');
+    }
+    await this.endpoint.play(file);
+    return { file };
+  }
+
+  async setMute(muted) {
+    this.isMuted = Boolean(muted);
+    if (this.endpoint && this.channelUuid) {
+      const level = this.isMuted ? -4 : 0;
+      await this.endpoint.api(`uuid_audio ${this.channelUuid} start read mute ${level}`).catch(() => {});
+    }
+    return { isMuted: this.isMuted };
+  }
+
+  async setHold(held) {
+    this.isOnHold = Boolean(held);
+    if (this.endpoint && this.channelUuid) {
+      const subCmd = this.isOnHold ? `${this.channelUuid}` : `off ${this.channelUuid}`;
+      await this.endpoint.api(`uuid_hold ${subCmd}`).catch(() => {});
+    }
+    return { isOnHold: this.isOnHold };
+  }
+
+  async controlRecording(action = 'start') {
+    if (action === 'start') {
+      if (!this.recorder || this.recorder.isStopped) {
+        this.recorder = new CallRecorder({
+          callId: this.callId,
+          tenantId: this.tenant.id,
+          recordingDir: this.tenant.recordingDir
+        });
+        this.mediaBridge.setRecorder(this.recorder);
+        await this.recorder.start();
+      } else if (this.recorder.isPaused) {
+        this.recorder.resume();
+      }
+      return {
+        recordingActive: true,
+        recordingPaused: false,
+        fileName: this.recorder.fileName
+      };
+    }
+
+    if (action === 'pause') {
+      if (this.recorder && this.recorder.isStarted && !this.recorder.isStopped) {
+        this.recorder.pause();
+      }
+      return {
+        recordingActive: false,
+        recordingPaused: !!(this.recorder && this.recorder.isPaused)
+      };
+    }
+
+    if (action === 'resume') {
+      if (this.recorder && this.recorder.isStarted && !this.recorder.isStopped) {
+        this.recorder.resume();
+      }
+      return {
+        recordingActive: !!(this.recorder && this.recorder.isStarted && !this.recorder.isPaused),
+        recordingPaused: false
+      };
+    }
+
+    if (action === 'stop') {
+      if (this.recorder) {
+        await this.recorder.stop();
+      }
+      return {
+        recordingActive: false,
+        recordingPaused: false
+      };
+    }
+
+    throw new Error(`Ação de gravação inválida: ${action} (use start, pause, resume ou stop)`);
+  }
+
   terminateCall(reason = 'normal_hangup') {
     if (this.isTerminated) return;
     this.isTerminated = true;
@@ -853,6 +1072,118 @@ srf.on('error', (err) => {
 
 // Inicializa Pool de Múltiplas Instâncias FreeSWITCH e o Servidor HTTP/WS
 fsPool.start();
+
+// Handler para Originação de Chamadas Ativas (POST /v1/calls)
+async function originateOutboundCall(params) {
+  if (isShuttingDown || !fsPool.hasHealthyNode()) {
+    throw new Error('Serviço indisponível ou sem nós FreeSWITCH saudáveis');
+  }
+
+  const tenantId = params.tenantId || 'default';
+  const baseTenant = tenantManager.tenants.get(tenantId) || tenantManager.getDefaultTenant();
+  const tenant = {
+    ...baseTenant,
+    ...(params.instructions ? { instructions: params.instructions } : {}),
+    ...(params.voice ? { voice: params.voice } : {}),
+    ...(params.openaiModel ? { openaiModel: params.openaiModel } : {})
+  };
+
+  const slotCheck = tenantManager.tryAcquireSlot(tenant);
+  if (!slotCheck.allowed) {
+    throw new Error(slotCheck.reason);
+  }
+
+  let releaseNodeSlot = null;
+  let bridge = null;
+  let dialog = null;
+  let tenantSlotReleased = false;
+
+  const releaseTenantSlotOnce = () => {
+    if (tenantSlotReleased) return;
+    tenantSlotReleased = true;
+    tenantManager.releaseSlot(tenant);
+  };
+
+  try {
+    const from = params.from || '1000';
+    const to = params.to;
+    const customHeaders = params.headers || {};
+
+    const { endpoint, dialog: uacDialog, fsNode, releaseNodeSlot: rSlot } = await fsPool.originateCall(srf, {
+      to,
+      from,
+      headers: customHeaders
+    });
+
+    dialog = uacDialog;
+    releaseNodeSlot = rSlot;
+    const callId = dialog.sip?.callId || `out-${Date.now()}`;
+
+    console.log(
+      `[${callId}] 📤 Chamada OUTBOUND conectada de ${from} para ${to} | Tenant: [${tenant.id}] | Nó Mídia: [${fsNode.id}]`
+    );
+
+    const sipHeaders = {
+      'x-amd-enabled':
+        params.amd !== undefined ? String(Boolean(params.amd)) : customHeaders['X-AMD-Enabled'] || 'true',
+      'x-stt-enabled':
+        params.stt !== undefined ? String(Boolean(params.stt)) : customHeaders['X-STT-Enabled'],
+      'x-dtmf-enabled':
+        params.dtmf !== undefined ? String(Boolean(params.dtmf)) : customHeaders['X-DTMF-Enabled'],
+      'x-tenant-id': tenant.id
+    };
+
+    bridge = new OpenAIS2SBridge(tenant, sipHeaders);
+    activeBridges.set(callId, bridge);
+
+    dialog.on('destroy', async () => {
+      console.log(`[${callId}] Chamada outbound encerrada.`);
+      activeBridges.delete(callId);
+      releaseTenantSlotOnce();
+      if (releaseNodeSlot) releaseNodeSlot();
+      try {
+        if (bridge) await bridge.stop();
+      } catch {}
+    });
+
+    bridge.start({ callId, endpoint, dialog, caller: from, called: to }).catch((err) => {
+      console.error(`[${callId}] Erro em bridge.start (outbound):`, err.message);
+    });
+
+    return {
+      ok: true,
+      callId,
+      channelUuid: getChannelUuid(endpoint),
+      tenantId: tenant.id,
+      from,
+      to,
+      mediaNode: fsNode.id,
+      amdEnabled: sipHeaders['x-amd-enabled'] === 'true',
+      sttEnabled: sipHeaders['x-stt-enabled'] === 'true' || Boolean(tenant.stt?.enabled)
+    };
+  } catch (err) {
+    releaseTenantSlotOnce();
+    if (releaseNodeSlot) releaseNodeSlot();
+    if (dialog) {
+      try {
+        dialog.destroy();
+      } catch {}
+    }
+    throw err;
+  }
+}
+
+mediaServer.setApiHandler(
+  createApiRouter({
+    activeBridges,
+    tenantManager,
+    fsPool,
+    whisperPool,
+    mediaServer,
+    originateCallHandler: originateOutboundCall
+  })
+);
+
 mediaServer.listen().catch(() => {});
 
 // Atendimento de Chamadas SIP (INVITE) com Balanceamento entre Instâncias FreeSWITCH
@@ -919,7 +1250,7 @@ srf.invite(async (req, res) => {
       } catch {}
     });
 
-    await bridge.start({ callId, endpoint, dialog });
+    await bridge.start({ callId, endpoint, dialog, caller, called });
   } catch (err) {
     console.error(`[${callId}] Erro durante atendimento da chamada:`, err);
     activeBridges.delete(callId);

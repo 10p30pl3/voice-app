@@ -22,6 +22,8 @@ const FreeSwitchPool = require('./utils/freeswitch-pool');
 const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
 const { CallRecorder, formatDateTime } = require('./utils/call-recorder');
+const { createApiRouter } = require('./utils/api-router');
+const http = require('http');
 
 // Extrai helpers de áudio do index.js para teste unitário
 const indexContent = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
@@ -449,12 +451,15 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
     tenant: { dtmf: { enabled: true, debounceMs: 80 } },
     whisperSession: { isSttEnabled: true },
     recorder: {
-       transcripts: [],
+      transcripts: [],
       addTranscript(speaker, text) {
         const formatted = `[${formatDateTime()}] ${speaker}: ${text}`;
         this.transcripts.push(formatted);
         return { formatted };
       }
+    },
+    recordTranscriptTurn(speaker, text) {
+      return this.recorder.addTranscript(speaker, text);
     },
     mediaBridge: {
       killAudio: () => { bargeInKilled = true; }
@@ -508,8 +513,184 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   );
   console.log('   ✅ Regra Condicional de Gravação (STT) + DTMF In-Call aprovados!\n');
 
+  // -------------------------------------------------------------------------
+  // 9. Teste Completo da API REST (/v1) com os Principais Comandos de Mercado
+  // -------------------------------------------------------------------------
+  console.log('👉 [9/9] Testando API REST (/v1/commands, /v1/calls, originate, say, transfer, dtmf, mute, hold, recording, tenants)...');
+  const mockActiveBridges = new Map();
+  let lastAction = null;
+
+  const mockCallBridge = {
+    getCallInfo: (includeTranscript) => ({
+      callId: 'call-api-1',
+      channelUuid: 'uuid-api-1',
+      tenantId: 'default',
+      caller: '1000',
+      called: '2000',
+      sttEnabled: true,
+      recordingActive: true,
+      transcript: includeTranscript
+        ? [{ timestamp: '2026-11-01 18:20:00', speaker: 'Cliente', text: 'Oi', formatted: '[2026-11-01 18:20:00] Cliente: Oi' }]
+        : undefined
+    }),
+    say: (text, opts) => {
+      lastAction = { cmd: 'say', text, opts };
+      return { role: opts.role, interrupt: opts.interrupt };
+    },
+    interruptAgent: () => {
+      lastAction = { cmd: 'interrupt' };
+    },
+    transfer: async (target, opts) => {
+      lastAction = { cmd: 'transfer', target, opts };
+      return { mode: opts.mode, target };
+    },
+    sendDtmf: async (digits, direction) => {
+      lastAction = { cmd: 'dtmf', digits, direction };
+      return { digits, direction };
+    },
+    setMute: async (muted) => {
+      lastAction = { cmd: 'mute', muted };
+      return { isMuted: muted };
+    },
+    setHold: async (held) => {
+      lastAction = { cmd: 'hold', held };
+      return { isOnHold: held };
+    },
+    controlRecording: async (action) => {
+      lastAction = { cmd: 'recording', action };
+      return { recordingActive: action === 'start' || action === 'resume', recordingPaused: action === 'pause' };
+    },
+    terminateCall: (reason) => {
+      lastAction = { cmd: 'hangup', reason };
+      mockActiveBridges.delete('call-api-1');
+    }
+  };
+  mockActiveBridges.set('call-api-1', mockCallBridge);
+
+  const tmpTenantsApiFile = path.join(os.tmpdir(), `tenants-api-qa-${Date.now()}.json`);
+  const tmApi = new TenantManagerClass(tmpTenantsApiFile);
+  const apiRouter = createApiRouter({
+    activeBridges: mockActiveBridges,
+    tenantManager: tmApi,
+    fsPool,
+    whisperPool,
+    mediaServer,
+    originateCallHandler: async (body) => ({
+      ok: true,
+      callId: 'out-call-999',
+      to: body.to,
+      from: body.from || '1000'
+    })
+  });
+
+  const apiTestServer = http.createServer((req, res) => {
+    apiRouter(req, res);
+  });
+  await new Promise((r) => apiTestServer.listen(0, '127.0.0.1', r));
+  const apiPort = apiTestServer.address().port;
+
+  function apiReq(method, urlPath, bodyObj = null) {
+    return new Promise((resolve, reject) => {
+      const data = bodyObj ? JSON.stringify(bodyObj) : null;
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port: apiPort,
+          path: urlPath,
+          method,
+          headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}
+        },
+        (res) => {
+          let raw = '';
+          res.on('data', (c) => (raw += c));
+          res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(raw) }));
+        }
+      );
+      req.on('error', reject);
+      if (data) req.write(data);
+      req.end();
+    });
+  }
+
+  // 9.1 Catálogo de comandos e Status do Cluster
+  const catRes = await apiReq('GET', '/v1/commands');
+  assert.strictEqual(catRes.status, 200);
+  assert.ok(Array.isArray(catRes.body.commandsCatalog) && catRes.body.commandsCatalog.length >= 5);
+
+  const statusRes = await apiReq('GET', '/v1/status');
+  assert.strictEqual(statusRes.status, 200);
+  assert.ok(statusRes.body.whisperCluster && typeof statusRes.body.whisperCluster.totalNodes === 'number');
+
+  const nodesRes = await apiReq('GET', '/v1/cluster/nodes');
+  assert.strictEqual(nodesRes.status, 200);
+  assert.ok(nodesRes.body.freeSwitch && nodesRes.body.whisper);
+
+  // 9.2 Listagem de chamadas ativas
+  const listCalls = await apiReq('GET', '/v1/calls');
+  assert.strictEqual(listCalls.status, 200);
+  assert.strictEqual(listCalls.body.count, 1);
+
+  // 9.3 Originação Outbound (POST /v1/calls)
+  const origRes = await apiReq('POST', '/v1/calls', { to: '1000@192.168.15.36', from: '551140040001' });
+  assert.strictEqual(origRes.status, 201);
+  assert.strictEqual(origRes.body.callId, 'out-call-999');
+
+  // 9.4 Comandos In-Call: say, interrupt, transfer, dtmf, mute, hold, recording (pause/resume), transcript, hangup
+  const sayRes = await apiReq('POST', '/v1/calls/call-api-1/say', { text: 'Ofereça 20% de desconto agora' });
+  assert.strictEqual(sayRes.status, 200);
+  assert.strictEqual(lastAction.cmd, 'say');
+
+  const intRes = await apiReq('POST', '/v1/calls/call-api-1/interrupt');
+  assert.strictEqual(intRes.status, 200);
+  assert.strictEqual(lastAction.cmd, 'interrupt');
+
+  const xferRes = await apiReq('POST', '/v1/calls/call-api-1/transfer', { target: '2005', mode: 'blind' });
+  assert.strictEqual(xferRes.status, 200);
+  assert.strictEqual(lastAction.target, '2005');
+
+  const dtmfApiRes = await apiReq('POST', '/v1/calls/call-api-1/dtmf', { digits: '456#' });
+  assert.strictEqual(dtmfApiRes.status, 200);
+  assert.strictEqual(lastAction.digits, '456#');
+
+  const muteRes = await apiReq('POST', '/v1/calls/call-api-1/mute');
+  assert.strictEqual(muteRes.status, 200);
+  assert.strictEqual(muteRes.body.isMuted, true);
+
+  const holdRes = await apiReq('POST', '/v1/calls/call-api-1/hold');
+  assert.strictEqual(holdRes.status, 200);
+  assert.strictEqual(holdRes.body.isOnHold, true);
+
+  const recPauseRes = await apiReq('POST', '/v1/calls/call-api-1/recording', { action: 'pause' });
+  assert.strictEqual(recPauseRes.status, 200);
+  assert.strictEqual(recPauseRes.body.recordingPaused, true);
+
+  const trApiRes = await apiReq('GET', '/v1/calls/call-api-1/transcript');
+  assert.strictEqual(trApiRes.status, 200);
+  assert.ok(trApiRes.body.formatted.includes('Cliente: Oi'));
+
+  const hupRes = await apiReq('POST', '/v1/calls/call-api-1/hangup', { reason: 'operator_ended' });
+  assert.strictEqual(hupRes.status, 200);
+  assert.strictEqual(mockActiveBridges.size, 0);
+
+  // 9.5 CRUD de Tenants (/v1/tenants)
+  const createTenantRes = await apiReq('POST', '/v1/tenants', {
+    id: 'banco-xyz',
+    name: 'Banco XYZ',
+    dids: ['551130030000'],
+    stt: { enabled: true }
+  });
+  assert.strictEqual(createTenantRes.status, 201);
+  assert.strictEqual(createTenantRes.body.tenant.stt.enabled, true);
+
+  const delTenantRes = await apiReq('DELETE', '/v1/tenants/banco-xyz');
+  assert.strictEqual(delTenantRes.status, 200);
+
+  apiTestServer.close();
+  try { fs.unlinkSync(tmpTenantsApiFile); } catch {}
+  console.log('   ✅ API REST (/v1) com todos os principais comandos de mercado aprovada!\n');
+
   console.log('====================================================');
-  console.log('🎉 TODOS OS 8 BLOCOS DE QA PASSARAM COM 100% DE SUCESSO!');
+  console.log('🎉 TODOS OS 9 BLOCOS DE QA PASSARAM COM 100% DE SUCESSO!');
   console.log('====================================================');
 }
 

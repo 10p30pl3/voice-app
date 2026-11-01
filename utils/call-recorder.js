@@ -49,6 +49,7 @@ class CallRecorder {
     this.writeStream = null;
     this.transcriptStream = null;
     this.isStarted = false;
+    this.isPaused = false;
     this.isStopped = false;
     this.failed = false;
     this.dataBytesWritten = 0;
@@ -131,7 +132,7 @@ class CallRecorder {
    * @param {Date} [date] Data/hora opcional (padrão: agora)
    */
   addTranscript(speaker, text, date = new Date()) {
-    if (this.isStopped) return null;
+    if (this.isStopped || this.isPaused) return null;
     const cleanText = String(text || '').trim();
     if (!cleanText) return null;
 
@@ -170,7 +171,7 @@ class CallRecorder {
    * @param {Buffer} pcm8kBuffer Buffer PCM 16-bit 8kHz mono
    */
   pushAiChunk(pcm8kBuffer) {
-    if (!this.isStarted || this.isStopped || this.failed || !pcm8kBuffer || pcm8kBuffer.length < 2) return;
+    if (!this.isStarted || this.isPaused || this.isStopped || this.failed || !pcm8kBuffer || pcm8kBuffer.length < 2) return;
     const evenLen = pcm8kBuffer.length & ~1;
     if (evenLen <= 0) return;
     if (this.aiBytesAvailable + evenLen > this.maxAiBufferBytes) return;
@@ -187,6 +188,15 @@ class CallRecorder {
     this.aiQueue = [];
     this.aiQueueOffset = 0;
     this.aiBytesAvailable = 0;
+  }
+
+  pause() {
+    this.isPaused = true;
+    this.clearAiBuffer();
+  }
+
+  resume() {
+    this.isPaused = false;
   }
 
   /**
@@ -214,7 +224,7 @@ class CallRecorder {
    * @param {Buffer} userPcm8kBuffer Buffer PCM 16-bit 8kHz mono
    */
   writeUserChunk(userPcm8kBuffer) {
-    if (!this.isStarted || this.isStopped || this.failed || !this.writeStream) return;
+    if (!this.isStarted || this.isPaused || this.isStopped || this.failed || !this.writeStream) return;
     if (!userPcm8kBuffer || userPcm8kBuffer.length < 2) return;
 
     try {

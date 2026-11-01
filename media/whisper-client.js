@@ -80,6 +80,21 @@ class WhisperPool {
     node.unhealthyUntil = Date.now() + cooldownMs;
     node.lastError = errMsg;
   }
+
+  getStats() {
+    const healthyCount = this.nodes.filter((n) => n.isHealthy).length;
+    return {
+      totalNodes: this.nodes.length,
+      healthyNodes: healthyCount,
+      nodes: this.nodes.map((n) => ({
+        id: n.id,
+        url: n.url,
+        isHealthy: n.isHealthy,
+        activeSessions: n.activeSessions,
+        lastError: n.lastError
+      }))
+    };
+  }
 }
 
 const globalWhisperPool = new WhisperPool();
