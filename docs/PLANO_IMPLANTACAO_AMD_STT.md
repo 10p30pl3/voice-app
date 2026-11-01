@@ -91,6 +91,6 @@ Para permitir classificar centenas de chamadas simultâneas sem fila de espera:
 | Etapa | Componente | Status |
 | :--- | :--- | :---: |
 | **Base Escalável** | [`utils/freeswitch-pool.js`](../utils/freeswitch-pool.js), [`media/ws-media-bridge.js`](../media/ws-media-bridge.js) e [`utils/tenant-manager.js`](../utils/tenant-manager.js) | ✅ **Implantado** |
-| **Fase 1** | `media/whisper-client.js` (Node.js): `WhisperPool`, suporte aos **4 modos** (`Somente AMD`, `Somente STT`, `AMD + STT`, `Off`), Circuit Breaker e Proteção Anatel. | ⏳ **Pronto para iniciar** |
-| **Fase 2** | `whisper-service/` (Python FastAPI): Silero VAD + `faster-whisper` + **Dynamic Micro-Batcher (40ms, Fila P0/P1)** + Classificador de Padrões PT-BR + Filtro LGPD. | ⏳ **Pronto para iniciar** |
-| **Fase 3** | `whisper-service/scripts/`: Scripts de treino (`train_classifier.py`), descoberta de novos padrões e teste de carga (`bulk_ws_eval.py`). | ⏳ **Pronto para iniciar** |
+| **Fase 1** | [`media/whisper-client.js`](../media/whisper-client.js) (Node.js): `WhisperPool`, suporte aos **4 modos** (`Somente AMD`, `Somente STT`, `AMD + STT`, `Off`), Circuit Breaker e integração no [`index.js`](../index.js). | ✅ **Implantado** |
+| **Fase 2** | `whisper-service/` (Python FastAPI): Silero VAD + `faster-whisper` + **Dynamic Micro-Batcher (40ms, Fila P0/P1)** + Classificador de Padrões PT-BR + Filtro LGPD. | ✅ **Implantado** |
+| **Fase 3** | `whisper-service/scripts/`: Scripts de treino (`train_classifier.py`), descoberta de novos padrões e teste de carga (`bulk_ws_eval.py`). | ✅ **Implantado** |
