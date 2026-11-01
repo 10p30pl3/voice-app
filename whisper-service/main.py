@@ -110,6 +110,11 @@ async def audio_stream_endpoint(
                     silence_samples += len(f32)
                     # Atualiza suavemente o piso de ruído (EMA) em quadros de não-fala
                     noise_floor = 0.92 * noise_floor + 0.08 * rms
+                    # Se a fala ainda não começou, mantém apenas um pre-roll curto de ~200ms (10 chunks de 20ms)
+                    # para não enviar segundos de silêncio puro ao Whisper
+                    if speech_samples == 0 and len(audio_buffer) > 10:
+                        dropped = audio_buffer.pop(0)
+                        total_samples = max(0, total_samples - len(dropped))
 
                 speech_ms = int((speech_samples / 16000.0) * 1000)
                 silence_ms = int((silence_samples / 16000.0) * 1000)
@@ -178,7 +183,10 @@ async def audio_stream_endpoint(
                         silence_samples = 0
                         total_samples = 0
 
-                        await websocket.send_text(json.dumps(decision))
+                        try:
+                            await websocket.send_text(json.dumps(decision))
+                        except Exception:
+                            break
 
                         # Se for "Somente AMD" (sem STT), encerra a conexão imediatamente
                         if not stt:
@@ -200,13 +208,16 @@ async def audio_stream_endpoint(
 
                             if clean_stt.strip():
                                 stats["stt_transcriptions"] += 1
-                                await websocket.send_text(json.dumps({
-                                    "type": "transcript",
-                                    "call_id": call_id,
-                                    "text": clean_stt,
-                                    "speech_ms": phrase_speech_ms,
-                                    "is_final": True
-                                }))
+                                try:
+                                    await websocket.send_text(json.dumps({
+                                        "type": "transcript",
+                                        "call_id": call_id,
+                                        "text": clean_stt,
+                                        "speech_ms": phrase_speech_ms,
+                                        "is_final": True
+                                    }))
+                                except Exception:
+                                    break
                         elif total_samples >= (16000 * 4):
                             # Descarta silêncio acumulado > 4s para não crescer memória
                             audio_buffer = []

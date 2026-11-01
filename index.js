@@ -187,6 +187,7 @@ class OpenAIS2SBridge {
     this.currentProfile = 'SILENCE';
 
     this.openaiSocket = null;
+    this.openaiConnected = false;
     this.openaiReady = false;
     this.openaiReadyPromise = null;
     this.openaiReadyResolve = null;
@@ -240,7 +241,7 @@ class OpenAIS2SBridge {
 
     this.openaiSocket.on('open', () => {
       console.log(`[${this.callId}] 🟢 WebSocket OpenAI conectado com sucesso!`);
-      this.openaiReady = true;
+      this.openaiConnected = true;
       if (this.openaiReadyResolve) this.openaiReadyResolve();
     });
 
@@ -250,6 +251,7 @@ class OpenAIS2SBridge {
 
     this.openaiSocket.on('close', (code, reason) => {
       console.log(`[${this.callId}] 🔴 WebSocket OpenAI fechado. Código: ${code}, Razão: ${reason.toString()}`);
+      this.openaiConnected = false;
       this.openaiReady = false;
       if (!this.isTerminated) {
         this.terminateCall('openai_disconnected');
@@ -258,7 +260,7 @@ class OpenAIS2SBridge {
 
     this.openaiSocket.on('error', (err) => {
       console.error(`[${this.callId}] 🔴 Erro no WebSocket OpenAI:`, err.message);
-      if (!this.openaiReady && this.openaiReadyResolve) {
+      if (!this.openaiConnected && this.openaiReadyResolve) {
         this.openaiReadyResolve();
       }
     });
@@ -338,16 +340,22 @@ class OpenAIS2SBridge {
       this.terminateCall('max_duration_exceeded');
     }, maxDurationSec * 1000);
 
-    // 1. Handshake paralelo com OpenAI
-    this.initOpenAiConnection();
-
-    // 2. Inicia sessão Whisper (AMD Inteligente e/ou Transcrição STT) se configurado
+    // 1. Inicia sessão Whisper (AMD Inteligente e/ou Transcrição STT) se configurado
     this.whisperSession = new WhisperSession({
       callId: this.callId,
       channelUuid: this.channelUuid,
       tenant: this.tenant,
       sipHeaders: this.sipHeaders
     });
+
+    const isActiveAmd =
+      this.whisperSession.isAmdEnabled && this.whisperSession.amdMode === 'active';
+
+    // Se o AMD ativo NÃO estiver bloqueando, inicia o handshake da OpenAI em paralelo com o Sonar.
+    // Se o AMD ativo estiver ligado, só conectamos à OpenAI APÓS confirmar HUMANO (Zero sessões OpenAI em Caixa Postal/Operadora!).
+    if (!isActiveAmd) {
+      this.initOpenAiConnection();
+    }
 
     if (this.whisperSession.isActive()) {
       this.whisperSession.on('decision', (decision) => {
@@ -377,6 +385,7 @@ class OpenAIS2SBridge {
     // 3. Limpeza de sessões residuais
     this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop`).catch(() => {});
     await wait(100);
+    if (this.isTerminated) return;
 
     if (this.endpoint.conn) {
       try {
@@ -430,6 +439,7 @@ class OpenAIS2SBridge {
           !this.whisperSession.decisionReceived;
 
         if (
+          !this.isToneProbe &&
           !amdStillDeciding &&
           this.openaiReady &&
           this.openaiSocket &&
@@ -445,6 +455,7 @@ class OpenAIS2SBridge {
         }
       }
     });
+    if (this.isTerminated) return;
 
     // 4. Se o AMD estiver ligado na chamada, aguarda a classificação antes de falar na OpenAI
     const amdWasExecuted = !!(this.whisperSession && this.whisperSession.isAmdEnabled);
@@ -452,7 +463,10 @@ class OpenAIS2SBridge {
       console.log(`[${this.callId}] 🕵️ Aguardando análise do Detector de Secretária (AMD)...`);
       await this.whisperSession.waitForDecision();
       if (this.isTerminated) {
-        return; // Chamada encerrada pelo AMD (caixa_postal / operadora / silencio) sem gastar tokens OpenAI!
+        return; // Chamada encerrada pelo AMD (caixa_postal / operadora / silencio) sem abrir nem gastar sessão na OpenAI!
+      }
+      if (isActiveAmd && !this.openaiSocket) {
+        this.initOpenAiConnection();
       }
     }
 
@@ -519,11 +533,13 @@ class OpenAIS2SBridge {
     if (this.isTerminated) return;
 
     // 5. Aguarda confirmação do handshake OpenAI
-    if (!this.openaiReady && this.openaiReadyPromise) {
+    if (!this.openaiConnected && this.openaiReadyPromise) {
       await withTimeout(this.openaiReadyPromise, 4000).catch((e) => {
         console.warn(`[${this.callId}] Alerta no handshake OpenAI:`, e.message);
       });
     }
+
+    if (this.isTerminated) return;
 
     if (!this.openaiSocket || this.openaiSocket.readyState !== WebSocket.OPEN) {
       console.error(`[${this.callId}] 🔴 Falha ao estabelecer conexão com a OpenAI Realtime.`);
@@ -531,37 +547,41 @@ class OpenAIS2SBridge {
       return;
     }
 
-    // 6. Envia configuração da sessão
-    const audioFormat = this.useG711 ? 'g711_ulaw' : 'pcm16';
+    // 6. Envia configuração da sessão compatível com OpenAI Realtime GA (type: 'realtime')
     const sessionUpdate = {
       type: 'session.update',
       session: {
         type: 'realtime',
         audio: {
           input: {
-            format: { type: audioFormat },
             turn_detection: {
               type: 'server_vad',
               threshold: vadThreshold,
               prefix_padding_ms: prefixPaddingMs,
               silence_duration_ms: silenceDurationMs
             }
-          },
-          output: {
-            format: { type: audioFormat }
           }
         }
       }
     };
 
+    if (this.useG711) {
+      sessionUpdate.session.audio.input.format = { type: 'audio/pcmu' };
+      sessionUpdate.session.audio.output = {
+        format: { type: 'audio/pcmu' }
+      };
+    }
+
     if (this.tenant.openaiPromptId) {
       sessionUpdate.session.prompt = { id: this.tenant.openaiPromptId };
     } else if (this.tenant.instructions) {
       sessionUpdate.session.instructions = this.tenant.instructions;
-    }
-
-    if (this.tenant.voice) {
-      sessionUpdate.session.voice = this.tenant.voice;
+      if (this.tenant.voice) {
+        sessionUpdate.session.audio.output = {
+          ...(sessionUpdate.session.audio.output || {}),
+          voice: this.tenant.voice
+        };
+      }
     }
 
     this.openaiSocket.send(JSON.stringify(sessionUpdate));
@@ -574,7 +594,12 @@ class OpenAIS2SBridge {
     };
     this.openaiSocket.send(JSON.stringify(responseCreate));
 
-    console.log(`[${this.callId}] 🟢 IA configurada (Codec: ${audioFormat}) e pronta para conversação.`);
+    // Somente após session.update e response.create liberamos o envio de input_audio_buffer.append
+    this.openaiReady = true;
+
+    console.log(
+      `[${this.callId}] 🟢 IA configurada (Codec: ${this.useG711 ? 'g711_ulaw' : 'pcm24k'}) e pronta para conversação.`
+    );
   }
 
   terminateCall(reason = 'normal_hangup') {
@@ -592,6 +617,8 @@ class OpenAIS2SBridge {
   }
 
   async stop() {
+    this.isTerminated = true;
+
     if (this.maxDurationTimer) {
       clearTimeout(this.maxDurationTimer);
       this.maxDurationTimer = null;

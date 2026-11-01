@@ -19,7 +19,8 @@ class TenantManager {
       active: true,
       openaiApiKey: process.env.OPENAI_API_KEY,
       openaiModel: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini',
-      openaiPromptId: process.env.OPENAI_PROMPT_ID || null,
+      openaiPromptId:
+        process.env.OPENAI_PROMPT_ID || 'pmpt_68b1a68ef0e8819784ef7056a79c675d088bcfde975cd0dd',
       instructions:
         process.env.OPENAI_AGENT_INSTRUCTIONS ||
         'Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma amigável.',
