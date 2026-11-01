@@ -9,7 +9,8 @@ import argparse
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
 import joblib
 
@@ -27,15 +28,23 @@ def train(data_path: str, output_path: str):
     X = df['text']
     y = df['label']
 
-    print(f"Treinando em {len(df)} amostras...")
+    print(f"Carregadas {len(df)} amostras:")
     print(df['label'].value_counts())
 
     pipeline = Pipeline([
-        ('tfidf', TfidfVectorizer(
-            ngram_range=(1, 2),
-            max_features=2500,
-            sublinear_tf=True
-        )),
+        ('features', FeatureUnion([
+            ('word_tfidf', TfidfVectorizer(
+                ngram_range=(1, 2),
+                max_features=2500,
+                sublinear_tf=True
+            )),
+            ('char_tfidf', TfidfVectorizer(
+                analyzer='char_wb',
+                ngram_range=(3, 5),
+                max_features=2500,
+                sublinear_tf=True
+            ))
+        ])),
         ('clf', LogisticRegression(
             class_weight='balanced',
             max_iter=500,
@@ -43,11 +52,21 @@ def train(data_path: str, output_path: str):
         ))
     ])
 
-    pipeline.fit(X, y)
-    y_pred = pipeline.predict(X)
-
-    print("\nRelatório de Classificação (Treino):")
-    print(classification_report(y, y_pred))
+    if len(df) >= 20 and df['label'].nunique() >= 2:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        pipeline.fit(X_train, y_train)
+        y_pred = pipeline.predict(X_test)
+        print("\nRelatório de Classificação (Validação Hold-out 20%):")
+        print(classification_report(y_test, y_pred))
+        # Re-treina com 100% dos dados para gerar o artefato final de produção
+        pipeline.fit(X, y)
+    else:
+        pipeline.fit(X, y)
+        y_pred = pipeline.predict(X)
+        print("\nRelatório de Classificação (Treino completo - dataset pequeno):")
+        print(classification_report(y, y_pred))
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     joblib.dump(pipeline, output_path)

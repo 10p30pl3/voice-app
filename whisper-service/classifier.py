@@ -1,6 +1,9 @@
 import re
 import os
-import joblib
+try:
+    import joblib
+except ImportError:
+    joblib = None
 
 # Padrões Semânticos de Operadoras Telefônicas Brasileiras (Claro, Vivo, Tim, Oi, Embratel, etc.)
 PATTERNS_OPERADORA = [
@@ -69,7 +72,7 @@ class AMDClassifier:
         self.load_ml_model()
 
     def load_ml_model(self):
-        if os.path.exists(self.model_path):
+        if joblib is not None and os.path.exists(self.model_path):
             try:
                 self.ml_pipeline = joblib.load(self.model_path)
                 print(f"[AMDClassifier] Modelo treinado de ML carregado de {self.model_path}")
@@ -192,13 +195,13 @@ class AMDClassifier:
             except Exception:
                 pass
 
-        # 8. Heurística de Cadência Temporal para fala contínua longa sem padrão humano
-        if speech_ms >= 2400:
+        # 8. Heurística de Cadência Temporal para fala contínua longa sem pausa dialógica (alinhado com o gatilho de 1800ms do main.py)
+        if speech_ms >= 1800 and silence_ms < 250:
             return {
                 "label": "caixa_postal",
-                "confidence": 0.75,
+                "confidence": 0.78,
                 "reason": "long_continuous_speech_heuristic",
-                "probas": {"caixa_postal": 0.75, "humano": 0.25, "operadora": 0.0, "silencio": 0.0}
+                "probas": {"caixa_postal": 0.78, "humano": 0.22, "operadora": 0.0, "silencio": 0.0}
             }
 
         return {

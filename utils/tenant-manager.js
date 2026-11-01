@@ -54,6 +54,14 @@ class TenantManager {
               this.tenants.set(item.id, {
                 ...defaultTenant,
                 ...item,
+                amd: {
+                  ...defaultTenant.amd,
+                  ...(item.amd || {})
+                },
+                stt: {
+                  ...defaultTenant.stt,
+                  ...(item.stt || {})
+                },
                 active: item.active !== false
               });
             }
@@ -70,7 +78,7 @@ class TenantManager {
 
   setupHotReload() {
     try {
-      fs.watchFile(this.configPath, { interval: 5000 }, (curr, prev) => {
+      fs.watchFile(this.configPath, { persistent: false, interval: 5000 }, (curr, prev) => {
         if (curr.mtimeMs !== prev.mtimeMs) {
           console.log(`[TenantManager] 🔄 Alteração detectada em ${this.configPath}. Recarregando...`);
           this.load();

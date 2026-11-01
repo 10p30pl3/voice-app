@@ -446,8 +446,9 @@ class OpenAIS2SBridge {
       }
     });
 
-    // 4. Se o AMD estiver ligado na chamada, aguarda a classificação antes de tocar o Sonar ou falar na OpenAI
-    if (this.whisperSession && this.whisperSession.isAmdEnabled) {
+    // 4. Se o AMD estiver ligado na chamada, aguarda a classificação antes de falar na OpenAI
+    const amdWasExecuted = !!(this.whisperSession && this.whisperSession.isAmdEnabled);
+    if (amdWasExecuted) {
       console.log(`[${this.callId}] 🕵️ Aguardando análise do Detector de Secretária (AMD)...`);
       await this.whisperSession.waitForDecision();
       if (this.isTerminated) {
@@ -458,7 +459,20 @@ class OpenAIS2SBridge {
     const bargeinLevel = this.tenant.bargeinLevel ?? 3;
 
     // 4. Calibração acústica (Sonar Mode)
-    if (bargeinLevel >= 3) {
+    // Se o AMD já executou, já coletamos amostras acústicas reais durante o "Alô?" (~1.5s),
+    // então pulamos os 1.1s do bip Sonar para responder ao humano imediatamente sem silêncio duplo!
+    if (amdWasExecuted) {
+      this.calibrationActive = false;
+      this.deviceMode = 'fone_ouvido';
+      this.currentProfile = this.energyManager.getClassification();
+      const config = this.profiles[this.currentProfile].fone;
+      vadThreshold = config.base;
+      prefixPaddingMs = config.prefix;
+      silenceDurationMs = config.silence;
+      console.log(
+        `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Ambiente ${this.currentProfile} | VAD ${vadThreshold} (Sonar pulado para 0ms de atraso)`
+      );
+    } else if (bargeinLevel >= 3) {
       this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
       await wait(400);
 

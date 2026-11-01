@@ -47,12 +47,19 @@ class WhisperPool {
         url: wsUrl,
         activeSessions: 0,
         isHealthy: true,
+        unhealthyUntil: 0,
         lastError: null
       };
     });
   }
 
   selectNode() {
+    const now = Date.now();
+    for (const n of this.nodes) {
+      if (!n.isHealthy && now >= n.unhealthyUntil) {
+        n.isHealthy = true;
+      }
+    }
     const healthy = this.nodes.filter((n) => n.isHealthy);
     if (healthy.length === 0) return this.nodes[0] || null;
     if (healthy.length === 1) return healthy[0];
@@ -65,6 +72,13 @@ class WhisperPool {
     const chosen = candidates[this.roundRobinIdx % candidates.length];
     this.roundRobinIdx = (this.roundRobinIdx + 1) % 1000000;
     return chosen;
+  }
+
+  markNodeUnhealthy(node, errMsg, cooldownMs = 10000) {
+    if (!node) return;
+    node.isHealthy = false;
+    node.unhealthyUntil = Date.now() + cooldownMs;
+    node.lastError = errMsg;
   }
 }
 
@@ -129,10 +143,10 @@ class WhisperSession extends EventEmitter {
   }
 
   async waitForDecision() {
+    if (this.lastDecision) return this.lastDecision;
     if (!this.isAmdEnabled) {
       return { label: 'humano', confidence: 1.0, reason: 'amd_disabled' };
     }
-    if (this.lastDecision) return this.lastDecision;
     return this.decisionPromise;
   }
 
@@ -230,16 +244,28 @@ class WhisperSession extends EventEmitter {
       });
 
       this.ws.on('error', (err) => {
-        console.warn(`[${this.callId}] ⚠️ Erro no WebSocket do Whisper [${this.node.id}]:`, err.message);
+        console.warn(`[${this.callId}] ⚠️ Erro no WebSocket do Whisper [${this.node?.id}]:`, err.message);
+        globalWhisperPool.markNodeUnhealthy(this.node, err.message);
+        this._releaseNode();
         this.resolveDecisionOnce({ label: 'humano', confidence: 0.5, reason: 'whisper_ws_error' });
       });
 
       this.ws.on('close', () => {
+        this._releaseNode();
         this.resolveDecisionOnce({ label: 'humano', confidence: 0.5, reason: 'whisper_ws_closed' });
       });
     } catch (err) {
       console.error(`[${this.callId}] Erro ao instanciar WebSocket Whisper:`, err.message);
+      globalWhisperPool.markNodeUnhealthy(this.node, err.message);
+      this._releaseNode();
       this.resolveDecisionOnce({ label: 'humano', confidence: 0.5, reason: 'whisper_init_failed' });
+    }
+  }
+
+  _releaseNode() {
+    if (this.node) {
+      this.node.activeSessions = Math.max(0, this.node.activeSessions - 1);
+      this.node = null;
     }
   }
 
@@ -271,10 +297,7 @@ class WhisperSession extends EventEmitter {
     // Garante que qualquer await waitForDecision() pendente seja destravado
     this.resolveDecisionOnce({ label: 'humano', confidence: 0.5, reason: 'session_stopped' });
 
-    if (this.node) {
-      this.node.activeSessions = Math.max(0, this.node.activeSessions - 1);
-      this.node = null;
-    }
+    this._releaseNode();
 
     if (this.ws) {
       try {

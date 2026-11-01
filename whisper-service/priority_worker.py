@@ -12,6 +12,16 @@ INITIAL_PROMPT_PT = (
     "O número chamado não existe, está desligado ou fora da área de cobertura."
 )
 
+# Alucinações clássicas do Whisper em trechos de ruído de linha/silêncio
+HALLUCINATION_PHRASES = (
+    "obrigado por assistir",
+    "legendas pela comunidade",
+    "legendado por",
+    "inscreva-se no canal",
+    "amara.org",
+    "subtitles by",
+)
+
 class BatchTask:
     def __init__(self, priority: int, audio_np: np.ndarray, initial_prompt: str, future: asyncio.Future):
         self.priority = priority # 0=AMD, 1=STT Live, 2=Batch
@@ -121,9 +131,20 @@ class PriorityInferenceWorker:
                 temperature=0.0,
                 condition_on_previous_text=False,
                 without_timestamps=True,
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=250,
+                    speech_pad_ms=150
+                ),
+                no_speech_threshold=0.6,
                 initial_prompt=task.initial_prompt
             )
-            return " ".join([s.text for s in segments]).strip()
+            text = " ".join([s.text for s in segments]).strip()
+            lower_text = text.lower()
+            for hall in HALLUCINATION_PHRASES:
+                if hall in lower_text:
+                    return ""
+            return text
         except Exception as err:
             print(f"[PriorityWorker] Erro na transcrição de task: {err}")
             return ""

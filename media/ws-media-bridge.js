@@ -132,6 +132,10 @@ class WsMediaServer {
       if (parts.length > 0) {
         const lastPart = parts[parts.length - 1];
         if (this.sessions.has(lastPart)) return lastPart;
+        // Se a URL especificou explicitamente /media/<uuid> e o UUID não existe em sessions, não faz fallback
+        if (parts[0] === 'media' && parts.length >= 2) {
+          return null;
+        }
       }
     } catch {}
 

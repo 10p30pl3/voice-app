@@ -81,7 +81,8 @@ async def audio_stream_endpoint(
     # Se amd=False (Modo Somente STT), amd_decided já inicia como True para liberar o STT imediatamente
     amd_decided = not amd
 
-    VAD_THRESHOLD = 0.015
+    BASE_VAD_THRESHOLD = 0.015
+    noise_floor = 0.008
 
     try:
         while True:
@@ -100,11 +101,15 @@ async def audio_stream_endpoint(
                 total_samples += len(f32)
 
                 rms = float(np.sqrt(np.mean(f32 ** 2)))
-                if rms > VAD_THRESHOLD:
+                dynamic_threshold = max(BASE_VAD_THRESHOLD, min(0.06, noise_floor * 2.2))
+
+                if rms > dynamic_threshold:
                     speech_samples += len(f32)
                     silence_samples = 0
                 else:
                     silence_samples += len(f32)
+                    # Atualiza suavemente o piso de ruído (EMA) em quadros de não-fala
+                    noise_floor = 0.92 * noise_floor + 0.08 * rms
 
                 speech_ms = int((speech_samples / 16000.0) * 1000)
                 silence_ms = int((silence_samples / 16000.0) * 1000)
