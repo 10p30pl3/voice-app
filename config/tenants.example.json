@@ -9,7 +9,17 @@
     "openaiPromptId": "pmpt_prompt_da_clinica",
     "instructions": "Você é a secretária virtual da Clínica Saúde. Agende consultas de forma acolhedora.",
     "voice": "shimmer",
-    "maxDurationSec": 600
+    "audioCodec": "pcm24k",
+    "maxDurationSec": 600,
+    "maxConcurrentCalls": 50,
+    "maxCallsPerSecond": 10,
+    "amd": {
+      "enabled": false,
+      "mode": "active"
+    },
+    "stt": {
+      "enabled": false
+    }
   },
   {
     "id": "cliente-imobiliaria",
@@ -19,6 +29,16 @@
     "openaiModel": "gpt-realtime-mini",
     "instructions": "Você é o assistente virtual da Imobiliária Prime. Ajude o cliente a encontrar imóveis para locação ou venda.",
     "voice": "alloy",
-    "maxDurationSec": 900
+    "audioCodec": "g711_ulaw",
+    "maxDurationSec": 900,
+    "maxConcurrentCalls": 100,
+    "maxCallsPerSecond": 20,
+    "amd": {
+      "enabled": true,
+      "mode": "active"
+    },
+    "stt": {
+      "enabled": true
+    }
   }
 ]

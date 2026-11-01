@@ -17,11 +17,13 @@ function getLocalIp() {
 }
 
 const AUDIO_FORK_WS_HOST = process.env.AUDIO_FORK_WS_HOST || getLocalIp();
+const WORKER_ID = parseInt(process.env.NODE_APP_INSTANCE || process.env.WORKER_ID || '0', 10);
 
 /**
- * Servidor HTTP/WebSocket Centralizado (Singleton)
- * Roteia chamadas simultâneas sem colisão de portas (evita EADDRINUSE)
- * e disponibiliza endpoint /health para monitoramento e liveness probe.
+ * Servidor HTTP/WebSocket Centralizado por Worker
+ * - Suporta múltiplos processos (Multi-Core PM2/Cluster) alocando portas automaticamente (ex: 8090, 8091, 8092...)
+ * - Limita maxPayload em 64KB para evitar exaustão de memória (DoS)
+ * - Disponibiliza endpoint /health com métricas do worker e do cluster FreeSWITCH
  */
 class WsMediaServer {
   constructor() {
@@ -31,7 +33,7 @@ class WsMediaServer {
     this.isListening = false;
     this.listenPromise = null;
     this.sessions = new Map(); // channelUuid -> WsMediaBridge
-    this.pendingConnections = new Set(); // sessions aguardando conexão WS
+    this.pendingConnections = new Set();
     this.healthCallback = null;
   }
 
@@ -43,21 +45,20 @@ class WsMediaServer {
     if (this.isListening) return this.port;
     if (this.listenPromise) return this.listenPromise;
 
-    const targetPort = parseInt(
-      requestedPort || process.env.MEDIA_WS_PORT || '8090',
-      10
-    );
+    const basePort = parseInt(requestedPort || process.env.MEDIA_WS_PORT || '8090', 10);
+    let candidatePort = basePort > 0 ? basePort + WORKER_ID : 0;
 
     this.listenPromise = new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
-        // Endpoint de Health Check
         if (req.url === '/health' || req.url === '/healthz') {
           const extraHealth = this.healthCallback ? this.healthCallback() : {};
           const status = {
             status: 'ok',
+            workerId: WORKER_ID,
+            pid: process.pid,
             uptime: Math.floor(process.uptime()),
             timestamp: new Date().toISOString(),
-            activeCalls: this.sessions.size,
+            activeCallsInWorker: this.sessions.size,
             mediaPort: this.port,
             ...extraHealth
           };
@@ -66,12 +67,14 @@ class WsMediaServer {
         }
 
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('voice-app media server online');
+        res.end(`voice-app media server online (worker ${WORKER_ID})`);
       });
 
-      this.wss = new WebSocket.Server({ noServer: true });
+      this.wss = new WebSocket.Server({
+        noServer: true,
+        maxPayload: 64 * 1024 // Limite de 64KB por frame para proteção de memória
+      });
 
-      // Tratamento de HTTP Upgrade para roteamento de WebSocket
       this.server.on('upgrade', (req, socket, head) => {
         this.wss.handleUpgrade(req, socket, head, (ws) => {
           this.wss.emit('connection', ws, req);
@@ -82,19 +85,28 @@ class WsMediaServer {
         this.handleConnection(ws, req);
       });
 
+      let portRetries = 0;
+      const maxPortRetries = 10;
+
       this.server.on('error', (err) => {
-        console.error('[WsMediaServer] Erro no servidor HTTP central:', err.message);
-        if (err.code === 'EADDRINUSE') {
-          console.error(`[WsMediaServer] Porta ${targetPort} já está em uso!`);
+        if (err.code === 'EADDRINUSE' && portRetries < maxPortRetries && candidatePort > 0) {
+          portRetries += 1;
+          candidatePort += 1;
+          console.warn(`[WsMediaServer] Porta em uso! Tentando próxima porta livre: ${candidatePort}...`);
+          setTimeout(() => {
+            this.server.listen(candidatePort, '0.0.0.0');
+          }, 50);
+          return;
         }
+        console.error('[WsMediaServer] Erro no servidor HTTP central:', err.message);
         this.listenPromise = null;
         reject(err);
       });
 
-      this.server.listen(targetPort, '0.0.0.0', () => {
+      this.server.listen(candidatePort, '0.0.0.0', () => {
         this.port = this.server.address().port;
         this.isListening = true;
-        console.log(`[WsMediaServer] 🚀 Servidor Central de Mídia ouvindo em 0.0.0.0:${this.port}`);
+        console.log(`[WsMediaServer] 🚀 Worker #${WORKER_ID} (PID ${process.pid}) ouvindo mídia em 0.0.0.0:${this.port}`);
         resolve(this.port);
       });
     });
@@ -105,13 +117,11 @@ class WsMediaServer {
   extractChannelUuid(req) {
     try {
       const parsedUrl = new URL(req.url, 'http://localhost');
-      // Tenta query param: ?channelUuid=xyz ou ?uuid=xyz
       const queryUuid = parsedUrl.searchParams.get('channelUuid') || parsedUrl.searchParams.get('uuid');
       if (queryUuid && this.sessions.has(queryUuid)) {
         return queryUuid;
       }
 
-      // Tenta path: /media/:uuid ou /:uuid
       const parts = parsedUrl.pathname.split('/').filter(Boolean);
       for (const part of parts) {
         if (this.sessions.has(part)) {
@@ -119,14 +129,12 @@ class WsMediaServer {
         }
       }
 
-      // Se passou apenas /media/uuid ou /uuid direto
       if (parts.length > 0) {
         const lastPart = parts[parts.length - 1];
         if (this.sessions.has(lastPart)) return lastPart;
       }
-    } catch (e) {}
+    } catch {}
 
-    // Fallback de contingência: se há exatamente 1 sessão aguardando conexão
     if (this.pendingConnections.size === 1) {
       const [singleUuid] = this.pendingConnections;
       return singleUuid;
@@ -140,7 +148,7 @@ class WsMediaServer {
     const channelUuid = this.extractChannelUuid(req);
 
     if (!channelUuid || !this.sessions.has(channelUuid)) {
-      console.warn(`[WsMediaServer] Conexão WS rejeitada de ${ip} (URL: ${req.url}): canal não encontrado`);
+      console.warn(`[WsMediaServer] Conexão WS rejeitada de ${ip} (URL: ${req.url}): canal não registrado`);
       ws.close(1008, 'Channel not found');
       return;
     }
@@ -165,21 +173,23 @@ class WsMediaServer {
     this.listenPromise = null;
 
     for (const session of this.sessions.values()) {
-      try { session.stop(); } catch {}
+      try {
+        session.stop();
+      } catch {}
     }
     this.sessions.clear();
     this.pendingConnections.clear();
 
     if (this.wss) {
       try {
-        this.wss.clients.forEach(c => c.terminate());
+        this.wss.clients.forEach((c) => c.terminate());
         this.wss.close();
       } catch {}
       this.wss = null;
     }
 
     if (this.server) {
-      await new Promise(resolve => {
+      await new Promise((resolve) => {
         try {
           this.server.closeAllConnections?.();
           this.server.close(() => resolve());
@@ -193,12 +203,8 @@ class WsMediaServer {
   }
 }
 
-// Instância compartilhada única (Singleton)
 const mediaServerSingleton = new WsMediaServer();
 
-/**
- * Ponte de mídia por chamada (WsMediaBridge)
- */
 class WsMediaBridge {
   constructor() {
     this.socket = null;
@@ -227,15 +233,12 @@ class WsMediaBridge {
       throw new Error('Não consegui descobrir o uuid do canal para uuid_audio_fork');
     }
 
-    // Garante que o servidor central está ouvindo
     const port = await mediaServerSingleton.listen();
-
-    // Registra esta chamada no servidor central
     mediaServerSingleton.registerSession(this.channelUuid, this);
 
     const wsUrl = `ws://${AUDIO_FORK_WS_HOST}:${port}/media/${this.channelUuid}`;
     const cmd = `uuid_audio_fork ${this.channelUuid} start ${wsUrl} mono 8000`;
-    console.log(`[${this.callId}] Iniciando mod_audio_fork na porta compartilhada ${port}: ${cmd}`);
+    console.log(`[${this.callId}] Iniciando mod_audio_fork na porta ${port}: ${cmd}`);
 
     const response = await this.endpoint.api(cmd);
     console.log(`[${this.callId}] Resposta uuid_audio_fork:`, response?.body || response);
@@ -243,14 +246,13 @@ class WsMediaBridge {
 
   attachSocket(ws, ip) {
     this.socket = ws;
-    console.log(`[${this.callId}] [WsMediaBridge] mod_audio_fork conectado via WS de ${ip} (Canal: ${this.channelUuid})`);
+    console.log(`[${this.callId}] [WsMediaBridge] mod_audio_fork conectado de ${ip} (Canal: ${this.channelUuid})`);
 
     ws.on('message', (raw) => {
       if (this.stopped) return;
 
       if (Buffer.isBuffer(raw)) {
-        const base64 = raw.toString('base64');
-        this.onAudio && this.onAudio(base64);
+        this.onAudio && this.onAudio(raw);
         return;
       }
 
@@ -258,9 +260,9 @@ class WsMediaBridge {
       if (s && s.length > 0) {
         try {
           const msg = JSON.parse(s);
-          if (msg.audio) this.onAudio && this.onAudio(msg.audio);
+          if (msg.audio) this.onAudio && this.onAudio(Buffer.from(msg.audio, 'base64'));
         } catch {
-          this.onAudio && this.onAudio(Buffer.from(s).toString('base64'));
+          this.onAudio && this.onAudio(Buffer.from(s));
         }
       }
     });
@@ -304,15 +306,12 @@ class WsMediaBridge {
     if (this.stopped) return;
     this.stopped = true;
 
-    // 1. Encerra playback
     this.endPlaybackStream();
 
-    // 2. Remove registro no servidor central
     if (this.channelUuid) {
       mediaServerSingleton.unregisterSession(this.channelUuid);
     }
 
-    // 3. Para o audio_fork no FreeSWITCH
     try {
       if (this.endpoint && this.channelUuid) {
         const cmd = `uuid_audio_fork ${this.channelUuid} stop`;
@@ -323,7 +322,6 @@ class WsMediaBridge {
       console.error(`[${this.callId}] Erro no stop uuid_audio_fork:`, err.message || err);
     }
 
-    // 4. Fecha socket desta chamada
     try {
       if (this.socket) {
         this.socket.terminate();

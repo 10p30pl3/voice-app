@@ -1,7 +1,6 @@
 require('dotenv').config({ override: true });
-// Voice App - Production-Ready Multi-Tenant Voice Gateway (Drachtio + FreeSWITCH + OpenAI Realtime)
+// Voice App - High-Scalability Multi-Tenant & Multi-FreeSWITCH Voice Gateway
 
-// Override global de logs para incluir HH:MM:SS
 const originalLog = console.log;
 const originalError = console.error;
 const originalWarn = console.warn;
@@ -14,35 +13,32 @@ const Srf = require('drachtio-srf');
 const Mrf = require('drachtio-fsmrf');
 const WebSocket = require('ws');
 
+const DRACHTIO_MODE = (process.env.DRACHTIO_MODE || 'inbound').toLowerCase(); // 'inbound' (connect) ou 'outbound' (listen)
 const DRACHTIO_HOST = process.env.DRACHTIO_HOST || '127.0.0.1';
 const DRACHTIO_PORT = parseInt(process.env.DRACHTIO_PORT || '9022', 10);
 const DRACHTIO_SECRET = process.env.DRACHTIO_SECRET || 'cymru';
-
-const FREESWITCH_HOST = process.env.FREESWITCH_HOST || '127.0.0.1';
-const FREESWITCH_PORT = parseInt(process.env.FREESWITCH_PORT || '8021', 10);
-const FREESWITCH_SECRET = process.env.FREESWITCH_SECRET || 'JambonzR0ck$';
+const DRACHTIO_LISTEN_PORT = parseInt(process.env.DRACHTIO_LISTEN_PORT || '3000', 10);
+const WORKER_ID = parseInt(process.env.NODE_APP_INSTANCE || process.env.WORKER_ID || '0', 10);
 
 const EnergyManager = require('./utils/energy-manager');
 const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
 const tenantManager = require('./utils/tenant-manager');
+const FreeSwitchPool = require('./utils/freeswitch-pool');
 
 const srf = new Srf();
 const mrf = new Mrf(srf);
+const fsPool = new FreeSwitchPool(mrf);
 
-let mediaserver = null;
-let mrfReady = false;
-let isConnectingMrf = false;
-let attempts = 0;
 let isShuttingDown = false;
-
 const activeBridges = new Map(); // callId -> OpenAIS2SBridge
 
-// Configura callback para endpoint /health do mediaServer
+// Endpoint /health agora exibe métricas do Worker, Tenants e de todo o Cluster FreeSWITCH
 mediaServer.setHealthCallback(() => ({
-  drachtioConnected: !!srf.connected,
-  freeSwitchConnected: mrfReady,
-  activeCalls: activeBridges.size,
+  drachtioMode: DRACHTIO_MODE,
+  drachtioConnected: DRACHTIO_MODE === 'outbound' ? true : !!srf.connected,
+  freeSwitchCluster: fsPool.getPoolStats(),
+  activeCallsByTenant: tenantManager.getTenantStats(),
   shuttingDown: isShuttingDown
 }));
 
@@ -73,50 +69,85 @@ function getChannelUuid(endpoint) {
   );
 }
 
-// Helper de upsampling PCM16: 8kHz para 24kHz com Interpolação Linear (Anti-Aliasing)
+// Helper de upsampling PCM16: 8kHz -> 24kHz com Interpolação Linear e Buffer.allocUnsafe (Zero-Fill Overhead)
 function upsample8to24(buffer8k) {
-  const samplesCount = Math.floor(buffer8k.length / 2);
+  const samplesCount = buffer8k.length >> 1; // Math.floor(length / 2) via bitshift
   if (samplesCount === 0) return Buffer.alloc(0);
-  const buffer24k = Buffer.alloc(samplesCount * 6);
+  const buffer24k = Buffer.allocUnsafe(samplesCount * 6);
 
   for (let i = 0; i < samplesCount; i++) {
     const s0 = buffer8k.readInt16LE(i * 2);
-    const s1 = (i + 1 < samplesCount) ? buffer8k.readInt16LE((i + 1) * 2) : s0;
+    const s1 = i + 1 < samplesCount ? buffer8k.readInt16LE((i + 1) * 2) : s0;
 
     const diff = s1 - s0;
-    const v0 = s0;
-    const v1 = Math.round(s0 + diff * 0.3333);
-    const v2 = Math.round(s0 + diff * 0.6667);
-
     const pos = i * 6;
-    buffer24k.writeInt16LE(v0, pos);
-    buffer24k.writeInt16LE(v1, pos + 2);
-    buffer24k.writeInt16LE(v2, pos + 4);
+    buffer24k.writeInt16LE(s0, pos);
+    buffer24k.writeInt16LE((s0 + diff * 0.3333) | 0, pos + 2);
+    buffer24k.writeInt16LE((s0 + diff * 0.6667) | 0, pos + 4);
   }
   return buffer24k;
 }
 
-// Helper de downsampling PCM16: 24kHz para 8kHz com filtro Anti-Aliasing (Média Móvel)
+// Helper de downsampling PCM16: 24kHz -> 8kHz com filtro Anti-Aliasing e Buffer.allocUnsafe
 function downsample24to8(buffer24k) {
-  const samplesCount = Math.floor(buffer24k.length / 2);
-  const targetSamplesCount = Math.floor(samplesCount / 3);
-  const buffer8k = Buffer.alloc(targetSamplesCount * 2);
+  const samplesCount = buffer24k.length >> 1;
+  const targetSamplesCount = (samplesCount / 3) | 0;
+  if (targetSamplesCount === 0) return Buffer.alloc(0);
+  const buffer8k = Buffer.allocUnsafe(targetSamplesCount * 2);
+
   for (let i = 0; i < targetSamplesCount; i++) {
     const offset = i * 6;
     const s1 = buffer24k.readInt16LE(offset);
     const s2 = buffer24k.readInt16LE(offset + 2);
     const s3 = buffer24k.readInt16LE(offset + 4);
 
-    // Média dos 3 samples para evitar distorção metálica (aliasing)
-    const avg = Math.round((s1 + s2 + s3) / 3);
-    buffer8k.writeInt16LE(avg, i * 2);
+    buffer8k.writeInt16LE(((s1 + s2 + s3) / 3) | 0, i * 2);
   }
   return buffer8k;
+}
+
+// Tabelas rápidas de conversão Linear PCM16 <-> G.711 u-law (8kHz nativo, zero resampling)
+function linear16ToMulaw(pcm16Buffer) {
+  const samples = pcm16Buffer.length >> 1;
+  const mulaw = Buffer.allocUnsafe(samples);
+  const BIAS = 0x84;
+  const CLIP = 32635;
+
+  for (let i = 0; i < samples; i++) {
+    let sample = pcm16Buffer.readInt16LE(i * 2);
+    const sign = (sample >> 8) & 0x80;
+    if (sign !== 0) sample = -sample;
+    if (sample > CLIP) sample = CLIP;
+    sample += BIAS;
+
+    let exponent = 7;
+    for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {}
+    const mantissa = (sample >> (exponent + 3)) & 0x0f;
+    mulaw[i] = ~(sign | (exponent << 4) | mantissa) & 0xff;
+  }
+  return mulaw;
+}
+
+function mulawToLinear16(mulawBuffer) {
+  const len = mulawBuffer.length;
+  const pcm16 = Buffer.allocUnsafe(len * 2);
+  for (let i = 0; i < len; i++) {
+    const uVal = ~mulawBuffer[i] & 0xff;
+    const sign = uVal & 0x80;
+    const exponent = (uVal >> 4) & 0x07;
+    const mantissa = uVal & 0x0f;
+    let sample = ((mantissa << 3) + 0x84) << exponent;
+    sample -= 0x84;
+    if (sign !== 0) sample = -sample;
+    pcm16.writeInt16LE(sample, i * 2);
+  }
+  return pcm16;
 }
 
 class OpenAIS2SBridge {
   constructor(tenant) {
     this.tenant = tenant;
+    this.useG711 = tenant.audioCodec === 'g711_ulaw';
     this.endpoint = null;
     this.dialog = null;
     this.channelUuid = null;
@@ -182,9 +213,6 @@ class OpenAIS2SBridge {
     }
   }
 
-  /**
-   * Conecta à OpenAI Realtime API em paralelo imediato (Zero-Wait Handshake)
-   */
   initOpenAiConnection() {
     this.openaiReadyPromise = new Promise((resolve) => {
       this.openaiReadyResolve = resolve;
@@ -220,7 +248,6 @@ class OpenAIS2SBridge {
     this.openaiSocket.on('close', (code, reason) => {
       console.log(`[${this.callId}] 🔴 WebSocket OpenAI fechado. Código: ${code}, Razão: ${reason.toString()}`);
       this.openaiReady = false;
-      // Prevenção de chamadas zumbi: encerra a ligação SIP se a IA desconectar
       if (!this.isTerminated) {
         this.terminateCall('openai_disconnected');
       }
@@ -229,7 +256,7 @@ class OpenAIS2SBridge {
     this.openaiSocket.on('error', (err) => {
       console.error(`[${this.callId}] 🔴 Erro no WebSocket OpenAI:`, err.message);
       if (!this.openaiReady && this.openaiReadyResolve) {
-        this.openaiReadyResolve(); // Destrava o await
+        this.openaiReadyResolve();
       }
     });
   }
@@ -248,7 +275,6 @@ class OpenAIS2SBridge {
         }
       }
 
-      // Rastreia estado de fala do agente e inicia stream
       if (body.type === 'response.created' || body.type === 'response.output_item.added') {
         if (!this.isAgentTalking) {
           this.isAgentTalking = true;
@@ -259,18 +285,16 @@ class OpenAIS2SBridge {
         this.mediaBridge.endPlaybackStream();
       }
 
-      // Recebe pacotes de áudio de saída e injeta no stream de playback
       if (body.type === 'response.output_audio.delta' && body.delta) {
         if (!this.isAgentTalking) {
           this.isAgentTalking = true;
           this.mediaBridge.startPlaybackStream();
         }
-        const pcm24k = Buffer.from(body.delta, 'base64');
-        const pcm8k = downsample24to8(pcm24k);
+        const rawDelta = Buffer.from(body.delta, 'base64');
+        const pcm8k = this.useG711 ? mulawToLinear16(rawDelta) : downsample24to8(rawDelta);
         this.mediaBridge.pushAudioChunk(pcm8k);
       }
 
-      // Fim da fala da IA
       if (['response.output_audio.done', 'response.done'].includes(body.type)) {
         if (this.isAgentTalking) {
           this.isAgentTalking = false;
@@ -279,7 +303,6 @@ class OpenAIS2SBridge {
         }
       }
 
-      // Detecção de Barge-In (interrupção pelo usuário)
       if (body.type === 'input_audio_buffer.speech_started') {
         console.log(`[${this.callId}] 🎤 BARGE-IN: Usuário falou! Interrompendo agente...`);
         this.isAgentTalking = false;
@@ -306,22 +329,19 @@ class OpenAIS2SBridge {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
 
-    // Trava de segurança financeira: Duração máxima da chamada (ex: 15 min)
     const maxDurationSec = this.tenant.maxDurationSec || 900;
     this.maxDurationTimer = setTimeout(() => {
-      console.warn(`[${this.callId}] ⏱️ Limite de duração da chamada atingido (${maxDurationSec}s). Encerrando por segurança.`);
+      console.warn(`[${this.callId}] ⏱️ Limite de duração da chamada atingido (${maxDurationSec}s). Encerrando.`);
       this.terminateCall('max_duration_exceeded');
     }, maxDurationSec * 1000);
 
-    // 1. Dispara conexão com a OpenAI IMEDIATAMENTE em paralelo
+    // 1. Handshake paralelo com OpenAI
     this.initOpenAiConnection();
 
-    // 2. Limpeza preventiva de sessões anteriores
-    console.log(`[${this.callId}] [RESET] Limpando sessões residuais no canal...`);
+    // 2. Limpeza de sessões residuais
     this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop`).catch(() => {});
     await wait(100);
 
-    // 3. Monitoramento de eventos ESL
     if (this.endpoint.conn) {
       try {
         this.endpoint.conn.subscribe('CUSTOM mod_audio_fork::play_audio');
@@ -331,7 +351,6 @@ class OpenAIS2SBridge {
       }
     }
 
-    // Hardware filters FreeSWITCH
     this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
     this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => {});
 
@@ -339,34 +358,33 @@ class OpenAIS2SBridge {
     let prefixPaddingMs = 300;
     let silenceDurationMs = 500;
 
-    // 4. Inicia captura de mídia via WsMediaBridge compartilhado
-    console.log(`[${this.callId}] 📡 Iniciando ponte de áudio com mod_audio_fork...`);
+    // 3. Inicia ponte de áudio recebendo Buffer binário direto (sem conversão Base64 intermediária)
     this.energyManager.reset();
+    this.calibrationActive = true;
 
     await this.mediaBridge.start({
       callId: this.callId,
       endpoint: this.endpoint,
-      onAudio: (base64) => {
-        const buffer = Buffer.from(base64, 'base64');
-
-        let isEcoSample = false;
-        if (this.calibrationActive && (this.isToneProbe || this.isAgentTalking)) {
-          isEcoSample = true;
-          this.calibrationSamplesRecv++;
-          if (this.calibrationSamplesRecv > 500) {
-            this.calibrationActive = false;
+      onAudio: (buffer) => {
+        // OTIMIZAÇÃO DE ESCALA: Só calcula RMS e Goertzel durante os 1.1s iniciais de calibração Sonar!
+        if (this.calibrationActive) {
+          let isEcoSample = false;
+          if (this.isToneProbe || this.isAgentTalking) {
+            isEcoSample = true;
+            this.calibrationSamplesRecv++;
+            if (this.calibrationSamplesRecv > 500) {
+              this.calibrationActive = false;
+            }
           }
+          this.energyManager.calculateEnergy(buffer, isEcoSample);
         }
 
-        this.energyManager.calculateEnergy(buffer, isEcoSample);
-
-        // Envia áudio capturado para a OpenAI com upsampling linear
         if (this.openaiReady && this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
-          const upsampledBuffer = upsample8to24(buffer);
+          const outboundAudio = this.useG711 ? linear16ToMulaw(buffer) : upsample8to24(buffer);
           this.openaiSocket.send(
             JSON.stringify({
               type: 'input_audio_buffer.append',
-              audio: upsampledBuffer.toString('base64')
+              audio: outboundAudio.toString('base64')
             })
           );
         }
@@ -375,7 +393,7 @@ class OpenAIS2SBridge {
 
     const bargeinLevel = this.tenant.bargeinLevel ?? 3;
 
-    // 5. Calibração acústica (Sonar Mode)
+    // 4. Calibração acústica (Sonar Mode)
     if (bargeinLevel >= 3) {
       this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
       await wait(400);
@@ -393,6 +411,9 @@ class OpenAIS2SBridge {
 
       this.deviceMode = this.energyManager.detectDeviceMode(this.callId);
 
+      // Desliga o cálculo de energia após travar o perfil do Sonar (economia de ~30% de CPU por chamada)
+      this.calibrationActive = false;
+
       if (this.deviceMode === 'viva_voz') {
         console.log(`[${this.callId}] 🛡️ Ativando AEC para proteção de Viva-voz.`);
         this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => {});
@@ -408,13 +429,16 @@ class OpenAIS2SBridge {
       prefixPaddingMs = config.prefix;
       silenceDurationMs = config.silence;
 
-      console.log(`[${this.callId}] 🎯 SONAR LOCK: Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold}`);
+      console.log(
+        `[${this.callId}] 🎯 SONAR LOCK: Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold}`
+      );
     } else {
+      this.calibrationActive = false;
       this.endpoint.play('tone_stream://v=-13;%(500,0,425)').catch(() => {});
       await wait(500);
     }
 
-    // 6. Aguarda o WebSocket da OpenAI (que já foi iniciado no passo 1!)
+    // 5. Aguarda confirmação do handshake OpenAI
     if (!this.openaiReady && this.openaiReadyPromise) {
       await withTimeout(this.openaiReadyPromise, 4000).catch((e) => {
         console.warn(`[${this.callId}] Alerta no handshake OpenAI:`, e.message);
@@ -427,19 +451,24 @@ class OpenAIS2SBridge {
       return;
     }
 
-    // 7. Envia configuração de sessão com parâmetros calibrados
+    // 6. Envia configuração da sessão
+    const audioFormat = this.useG711 ? 'g711_ulaw' : 'pcm16';
     const sessionUpdate = {
       type: 'session.update',
       session: {
         type: 'realtime',
         audio: {
           input: {
+            format: { type: audioFormat },
             turn_detection: {
               type: 'server_vad',
               threshold: vadThreshold,
               prefix_padding_ms: prefixPaddingMs,
               silence_duration_ms: silenceDurationMs
             }
+          },
+          output: {
+            format: { type: audioFormat }
           }
         }
       }
@@ -457,7 +486,6 @@ class OpenAIS2SBridge {
 
     this.openaiSocket.send(JSON.stringify(sessionUpdate));
 
-    // 8. Dispara saudação inicial
     const responseCreate = {
       type: 'response.create',
       response: {
@@ -466,7 +494,7 @@ class OpenAIS2SBridge {
     };
     this.openaiSocket.send(JSON.stringify(responseCreate));
 
-    console.log(`[${this.callId}] 🟢 IA configurada e pronta para conversação.`);
+    console.log(`[${this.callId}] 🟢 IA configurada (Codec: ${audioFormat}) e pronta para conversação.`);
   }
 
   terminateCall(reason = 'normal_hangup') {
@@ -509,20 +537,26 @@ class OpenAIS2SBridge {
   }
 }
 
-// Conexão Drachtio SRF
-srf.connect({
-  host: DRACHTIO_HOST,
-  port: DRACHTIO_PORT,
-  secret: DRACHTIO_SECRET
-});
+// Inicialização Drachtio SRF (Suporta Modo Inbound e Modo Outbound para Load Balancing)
+if (DRACHTIO_MODE === 'outbound') {
+  const listenPort = DRACHTIO_LISTEN_PORT + WORKER_ID;
+  srf.listen({ port: listenPort, secret: DRACHTIO_SECRET });
+  console.log(`✅ Drachtio SRF em modo OUTBOUND ouvindo na porta ${listenPort} (Worker #${WORKER_ID})`);
+} else {
+  srf.connect({
+    host: DRACHTIO_HOST,
+    port: DRACHTIO_PORT,
+    secret: DRACHTIO_SECRET
+  });
 
-srf.on('connect', (err, hp) => {
-  if (err) {
-    console.error('🔴 Erro conectando ao Drachtio:', err);
-    return;
-  }
-  console.log('✅ Conectado ao Drachtio SRF:', hp);
-});
+  srf.on('connect', (err, hp) => {
+    if (err) {
+      console.error('🔴 Erro conectando ao Drachtio:', err);
+      return;
+    }
+    console.log(`✅ Conectado ao Drachtio SRF: ${hp} (Worker #${WORKER_ID})`);
+  });
+}
 
 srf.on('disconnect', () => {
   console.error('🚨 Drachtio SRF desconectado!');
@@ -532,54 +566,13 @@ srf.on('error', (err) => {
   console.error('🚨 Erro no Drachtio SRF:', err.message || err);
 });
 
-// Conexão FreeSWITCH ESL com Reconexão Automática
-async function connectMrf() {
-  if (isConnectingMrf) return;
-  isConnectingMrf = true;
+// Inicializa Pool de Múltiplas Instâncias FreeSWITCH e o Servidor HTTP/WS
+fsPool.start();
+mediaServer.listen().catch(() => {});
 
-  while (isConnectingMrf && !isShuttingDown) {
-    attempts += 1;
-    console.log(`Tentando conectar ao FreeSWITCH via ESL (tentativa ${attempts})...`);
-
-    try {
-      mediaserver = await withTimeout(
-        mrf.connect({
-          address: FREESWITCH_HOST,
-          port: FREESWITCH_PORT,
-          secret: FREESWITCH_SECRET
-        }),
-        15000
-      );
-
-      mrfReady = true;
-      isConnectingMrf = false;
-      attempts = 0;
-      console.log('✅ Conectado ao FreeSWITCH via ESL com sucesso!');
-
-      // Reconexão resiliente caso o FreeSWITCH caia ou reinicie
-      mediaserver.on('disconnect', () => {
-        console.error('🚨 FreeSWITCH ESL desconectado! Acionando reconexão automática...');
-        mrfReady = false;
-        mediaserver = null;
-        connectMrf();
-      });
-
-      mediaserver.on('error', (err) => {
-        console.error('🚨 Erro na conexão ESL com FreeSWITCH:', err.message || err);
-      });
-
-      break;
-    } catch (err) {
-      console.error('Erro conectando ao FreeSWITCH:', err.message || err);
-      await wait(3000);
-    }
-  }
-}
-connectMrf();
-
-// Atendimento de Chamadas SIP (INVITE) com Suporte Multi-Tenant
+// Atendimento de Chamadas SIP (INVITE) com Balanceamento entre Instâncias FreeSWITCH
 srf.invite(async (req, res) => {
-  if (isShuttingDown || !mrfReady || !mediaserver) {
+  if (isShuttingDown || !fsPool.hasHealthyNode()) {
     return res.send(503);
   }
 
@@ -591,17 +584,35 @@ srf.invite(async (req, res) => {
     return res.send(404);
   }
 
+  // Verifica limite de canais simultâneos e CPS do Tenant
+  const slotCheck = tenantManager.tryAcquireSlot(tenant);
+  if (!slotCheck.allowed) {
+    console.warn(`[${callId}] Chamada recusada para Tenant [${tenant.id}]: ${slotCheck.reason}`);
+    return res.send(slotCheck.sipStatus || 486);
+  }
+
   let endpoint;
   let dialog;
+  let fsNode;
+  let releaseNodeSlot;
   let bridge;
+  let tenantSlotReleased = false;
+
+  const releaseTenantSlotOnce = () => {
+    if (tenantSlotReleased) return;
+    tenantSlotReleased = true;
+    tenantManager.releaseSlot(tenant);
+  };
 
   try {
     const caller = req.callingNumber || req.get('From');
     const called = req.calledNumber || req.get('To');
-    console.log(`[${callId}] 📞 INVITE recebido de ${caller} para ${called} | Tenant: [${tenant.id}] ${tenant.name}`);
 
-    ({ endpoint, dialog } = await mediaserver.connectCaller(req, res));
-    console.log(`[${callId}] Chamada atendida.`);
+    // Aloca a chamada na instância de FreeSWITCH com menor carga do Pool
+    ({ endpoint, dialog, fsNode, releaseNodeSlot } = await fsPool.connectCaller(req, res));
+    console.log(
+      `[${callId}] 📞 Chamada atendida de ${caller} para ${called} | Tenant: [${tenant.id}] | Nó Mídia: [${fsNode.id}] (Ativas no nó: ${fsNode.activeCalls})`
+    );
 
     bridge = new OpenAIS2SBridge(tenant);
     activeBridges.set(callId, bridge);
@@ -609,6 +620,8 @@ srf.invite(async (req, res) => {
     dialog.on('destroy', async () => {
       console.log(`[${callId}] Chamada encerrada pelo assinante/rede.`);
       activeBridges.delete(callId);
+      releaseTenantSlotOnce();
+      if (releaseNodeSlot) releaseNodeSlot();
       try {
         if (bridge) await bridge.stop();
       } catch {}
@@ -618,9 +631,17 @@ srf.invite(async (req, res) => {
   } catch (err) {
     console.error(`[${callId}] Erro durante atendimento da chamada:`, err);
     activeBridges.delete(callId);
-    try { res.send(500); } catch {}
-    try { if (dialog) dialog.destroy(); } catch {}
-    try { if (bridge) await bridge.stop(); } catch {}
+    releaseTenantSlotOnce();
+    if (releaseNodeSlot) releaseNodeSlot();
+    try {
+      res.send(500);
+    } catch {}
+    try {
+      if (dialog) dialog.destroy();
+    } catch {}
+    try {
+      if (bridge) await bridge.stop();
+    } catch {}
   }
 });
 
@@ -630,7 +651,6 @@ async function gracefulShutdown(signal) {
   isShuttingDown = true;
   console.log(`\n[SHUTDOWN] Recebido sinal ${signal}. Encerrando graciosamente...`);
 
-  // 1. Encerra chamadas ativas
   const activeList = Array.from(activeBridges.values());
   console.log(`[SHUTDOWN] Finalizando ${activeList.length} chamada(s) ativa(s)...`);
   for (const bridge of activeList) {
@@ -640,12 +660,14 @@ async function gracefulShutdown(signal) {
   }
   activeBridges.clear();
 
-  // 2. Fecha servidor de mídia HTTP/WS
   try {
     await mediaServer.close();
   } catch {}
 
-  // 3. Desconecta do Drachtio
+  try {
+    await fsPool.stop();
+  } catch {}
+
   try {
     srf.disconnect();
   } catch {}

@@ -5,8 +5,10 @@ class TenantManager {
   constructor(configPath = null) {
     this.configPath = configPath || path.join(__dirname, '..', 'config', 'tenants.json');
     this.tenants = new Map();
-    this.reloadTimer = null;
+    this.activeCallsPerTenant = new Map(); // tenantId -> count
+    this.cpsWindows = new Map(); // tenantId -> { second: number, count: number }
     this.load();
+    this.setupHotReload();
   }
 
   getDefaultTenant() {
@@ -18,10 +20,22 @@ class TenantManager {
       openaiApiKey: process.env.OPENAI_API_KEY,
       openaiModel: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini',
       openaiPromptId: process.env.OPENAI_PROMPT_ID || null,
-      instructions: process.env.OPENAI_AGENT_INSTRUCTIONS || 'Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma amigável.',
+      instructions:
+        process.env.OPENAI_AGENT_INSTRUCTIONS ||
+        'Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma amigável.',
       voice: process.env.OPENAI_VOICE || 'alloy',
+      audioCodec: process.env.AUDIO_CODEC_MODE || 'pcm24k', // 'pcm24k' ou 'g711_ulaw'
       maxDurationSec: parseInt(process.env.MAX_CALL_DURATION_SEC || '900', 10),
-      bargeinLevel: parseInt(process.env.BARGEIN_LEVEL || '3', 10)
+      maxConcurrentCalls: parseInt(process.env.MAX_CONCURRENT_CALLS_PER_TENANT || '200', 10),
+      maxCallsPerSecond: parseInt(process.env.MAX_CPS_PER_TENANT || '30', 10),
+      bargeinLevel: parseInt(process.env.BARGEIN_LEVEL || '3', 10),
+      amd: {
+        enabled: process.env.AMD_DEFAULT_ENABLED === 'true',
+        mode: process.env.AMD_DEFAULT_MODE || 'active'
+      },
+      stt: {
+        enabled: process.env.STT_DEFAULT_ENABLED === 'true'
+      }
     };
   }
 
@@ -50,27 +64,31 @@ class TenantManager {
         console.error(`[TenantManager] Erro ao ler ${this.configPath}:`, err.message);
       }
     } else {
-      console.log(`[TenantManager] Arquivo tenants.json não encontrado. Operando com tenant padrão (.env)`);
+      console.log(`[TenantManager] Operando com tenant padrão (.env)`);
     }
   }
 
-  /**
-   * Identifica o cliente correspondente à chamada
-   * @param {Object} req - Objeto de requisição SIP (drachtio-srf)
-   * @returns {Object} Configuração do Tenant
-   */
+  setupHotReload() {
+    try {
+      fs.watchFile(this.configPath, { interval: 5000 }, (curr, prev) => {
+        if (curr.mtimeMs !== prev.mtimeMs) {
+          console.log(`[TenantManager] 🔄 Alteração detectada em ${this.configPath}. Recarregando...`);
+          this.load();
+        }
+      });
+    } catch {}
+  }
+
   resolveTenant(req) {
     const defaultTenant = this.tenants.get('default') || this.getDefaultTenant();
     if (!req) return defaultTenant;
 
-    // 1. Prioridade: Header SIP customizado (ex: X-Tenant-ID)
     const headerTenantId = req.get('X-Tenant-ID') || req.get('x-tenant-id');
     if (headerTenantId && this.tenants.has(headerTenantId)) {
       const t = this.tenants.get(headerTenantId);
       if (t.active) return t;
     }
 
-    // 2. Prioridade: Número discado (DID)
     const calledNumber = req.calledNumber || this.extractCalledNumber(req);
     if (calledNumber) {
       for (const tenant of this.tenants.values()) {
@@ -86,6 +104,63 @@ class TenantManager {
     }
 
     return defaultTenant;
+  }
+
+  /**
+   * Verifica limites de canais simultâneos (maxConcurrentCalls) e CPS (maxCallsPerSecond) do Tenant
+   * @returns {{ allowed: boolean, reason?: string, sipStatus?: number }}
+   */
+  tryAcquireSlot(tenant) {
+    const tenantId = tenant.id || 'default';
+    const currentCalls = this.activeCallsPerTenant.get(tenantId) || 0;
+    const maxCalls = tenant.maxConcurrentCalls || 200;
+
+    if (currentCalls >= maxCalls) {
+      return {
+        allowed: false,
+        reason: `Limite de chamadas simultâneas atingido (${currentCalls}/${maxCalls})`,
+        sipStatus: 486 // Busy Here
+      };
+    }
+
+    // Controle de CPS (Calls Per Second)
+    const nowSec = Math.floor(Date.now() / 1000);
+    const maxCps = tenant.maxCallsPerSecond || 30;
+    let cpsState = this.cpsWindows.get(tenantId);
+    if (!cpsState || cpsState.second !== nowSec) {
+      cpsState = { second: nowSec, count: 0 };
+      this.cpsWindows.set(tenantId, cpsState);
+    }
+
+    if (cpsState.count >= maxCps) {
+      return {
+        allowed: false,
+        reason: `Limite de CPS excedido (${cpsState.count}/${maxCps} chamadas/s)`,
+        sipStatus: 503 // Service Unavailable
+      };
+    }
+
+    cpsState.count += 1;
+    this.activeCallsPerTenant.set(tenantId, currentCalls + 1);
+    return { allowed: true };
+  }
+
+  releaseSlot(tenant) {
+    const tenantId = tenant?.id || 'default';
+    const current = this.activeCallsPerTenant.get(tenantId) || 0;
+    if (current <= 1) {
+      this.activeCallsPerTenant.delete(tenantId);
+    } else {
+      this.activeCallsPerTenant.set(tenantId, current - 1);
+    }
+  }
+
+  getTenantStats() {
+    const stats = {};
+    for (const [id, count] of this.activeCallsPerTenant.entries()) {
+      stats[id] = count;
+    }
+    return stats;
   }
 
   extractCalledNumber(req) {
