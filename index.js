@@ -90,20 +90,38 @@ function upsample8to24(buffer8k) {
   return buffer24k;
 }
 
-// Helper de downsampling PCM16: 24kHz -> 8kHz com filtro Anti-Aliasing e Buffer.allocUnsafe
+// Helper de downsampling PCM16: 24kHz -> 8kHz com filtro FIR Anti-Aliasing (elimina chiado/hiss de frequências agudas)
 function downsample24to8(buffer24k) {
   const samplesCount = buffer24k.length >> 1;
   const targetSamplesCount = (samplesCount / 3) | 0;
   if (targetSamplesCount === 0) return Buffer.alloc(0);
   const buffer8k = Buffer.allocUnsafe(targetSamplesCount * 2);
 
-  for (let i = 0; i < targetSamplesCount; i++) {
-    const offset = i * 6;
-    const s1 = buffer24k.readInt16LE(offset);
-    const s2 = buffer24k.readInt16LE(offset + 2);
-    const s3 = buffer24k.readInt16LE(offset + 4);
+  // Filtro FIR anti-aliasing simétrico de 7 taps (cutoff ~3.6kHz)
+  // Coeficientes: [-500, 1200, 6500, 18368, 6500, 1200, -500] (soma = 32768, ganho unitário DC exato)
+  // Rejeita frequências acima de 4kHz antes do subamostragem para evitar aliasing espectral (chiado)
+  const getSample = (idx) => {
+    if (idx < 0) idx = 0;
+    else if (idx >= samplesCount) idx = samplesCount - 1;
+    return buffer24k.readInt16LE(idx * 2);
+  };
 
-    buffer8k.writeInt16LE(((s1 + s2 + s3) / 3) | 0, i * 2);
+  for (let i = 0; i < targetSamplesCount; i++) {
+    const center = i * 3;
+    const s_m3 = getSample(center - 3);
+    const s_m2 = getSample(center - 2);
+    const s_m1 = getSample(center - 1);
+    const s_0  = getSample(center);
+    const s_p1 = getSample(center + 1);
+    const s_p2 = getSample(center + 2);
+    const s_p3 = getSample(center + 3);
+
+    const acc = -500 * (s_m3 + s_p3) + 1200 * (s_m2 + s_p2) + 6500 * (s_m1 + s_p1) + 18368 * s_0;
+    let out = (acc >> 15) | 0;
+    if (out > 32767) out = 32767;
+    else if (out < -32768) out = -32768;
+
+    buffer8k.writeInt16LE(out, i * 2);
   }
   return buffer8k;
 }
@@ -131,17 +149,21 @@ function linear16ToMulaw(pcm16Buffer) {
 }
 
 function mulawToLinear16(mulawBuffer) {
+  if (!mulawToLinear16.table) {
+    const table = new Int16Array(256);
+    for (let i = 0; i < 256; i++) {
+      const u = ~i;
+      let t = ((u & 0x0f) << 3) + 0x84;
+      t <<= (u & 0x70) >> 4;
+      table[i] = (u & 0x80) ? (0x84 - t) : (t - 0x84);
+    }
+    mulawToLinear16.table = table;
+  }
+  const table = mulawToLinear16.table;
   const len = mulawBuffer.length;
   const pcm16 = Buffer.allocUnsafe(len * 2);
   for (let i = 0; i < len; i++) {
-    const uVal = ~mulawBuffer[i] & 0xff;
-    const sign = uVal & 0x80;
-    const exponent = (uVal >> 4) & 0x07;
-    const mantissa = uVal & 0x0f;
-    let sample = ((mantissa << 3) + 0x84) << exponent;
-    sample -= 0x84;
-    if (sign !== 0) sample = -sample;
-    pcm16.writeInt16LE(sample, i * 2);
+    pcm16.writeInt16LE(table[mulawBuffer[i]], i * 2);
   }
   return pcm16;
 }
