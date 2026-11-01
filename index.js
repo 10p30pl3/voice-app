@@ -25,6 +25,7 @@ const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
 const tenantManager = require('./utils/tenant-manager');
 const FreeSwitchPool = require('./utils/freeswitch-pool');
+const { WhisperSession } = require('./media/whisper-client');
 
 const srf = new Srf();
 const mrf = new Mrf(srf);
@@ -145,8 +146,10 @@ function mulawToLinear16(mulawBuffer) {
 }
 
 class OpenAIS2SBridge {
-  constructor(tenant) {
+  constructor(tenant, sipHeaders = {}) {
     this.tenant = tenant;
+    this.sipHeaders = sipHeaders;
+    this.whisperSession = null;
     this.useG711 = tenant.audioCodec === 'g711_ulaw';
     this.endpoint = null;
     this.dialog = null;
@@ -338,7 +341,40 @@ class OpenAIS2SBridge {
     // 1. Handshake paralelo com OpenAI
     this.initOpenAiConnection();
 
-    // 2. Limpeza de sessões residuais
+    // 2. Inicia sessão Whisper (AMD Inteligente e/ou Transcrição STT) se configurado
+    this.whisperSession = new WhisperSession({
+      callId: this.callId,
+      channelUuid: this.channelUuid,
+      tenant: this.tenant,
+      sipHeaders: this.sipHeaders
+    });
+
+    if (this.whisperSession.isActive()) {
+      this.whisperSession.on('decision', (decision) => {
+        if (['caixa_postal', 'operadora', 'silencio'].includes(decision.label)) {
+          if (this.whisperSession.amdMode === 'active') {
+            console.log(
+              `[${this.callId}] 🤖 AMD [ACTIVE]: Detectada ${decision.label.toUpperCase()} (${decision.reason}). Encerrando chamada.`
+            );
+            this.terminateCall(`amd_${decision.label}`);
+          } else {
+            console.log(
+              `[${this.callId}] 🔍 AMD [SHADOW]: Detectada ${decision.label.toUpperCase()} (${decision.reason}). Chamada mantida.`
+            );
+          }
+        } else {
+          console.log(`[${this.callId}] 👤 AMD: HUMANO confirmado (${decision.reason}).`);
+        }
+      });
+
+      this.whisperSession.on('transcript', (stt) => {
+        console.log(`[${this.callId}] 📝 [STT] "${stt.text}"`);
+      });
+
+      this.whisperSession.start();
+    }
+
+    // 3. Limpeza de sessões residuais
     this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop`).catch(() => {});
     await wait(100);
 
@@ -366,6 +402,11 @@ class OpenAIS2SBridge {
       callId: this.callId,
       endpoint: this.endpoint,
       onAudio: (buffer) => {
+        // Encaminha áudio ao Whisper para AMD e/ou STT
+        if (this.whisperSession) {
+          this.whisperSession.pushAudio(buffer, 8000);
+        }
+
         // OTIMIZAÇÃO DE ESCALA: Só calcula RMS e Goertzel durante os 1.1s iniciais de calibração Sonar!
         if (this.calibrationActive) {
           let isEcoSample = false;
@@ -527,6 +568,11 @@ class OpenAIS2SBridge {
       await this.mediaBridge.stop();
     }
 
+    if (this.whisperSession) {
+      this.whisperSession.stop();
+      this.whisperSession = null;
+    }
+
     if (this.openaiSocket) {
       try {
         this.openaiSocket.close();
@@ -614,7 +660,13 @@ srf.invite(async (req, res) => {
       `[${callId}] 📞 Chamada atendida de ${caller} para ${called} | Tenant: [${tenant.id}] | Nó Mídia: [${fsNode.id}] (Ativas no nó: ${fsNode.activeCalls})`
     );
 
-    bridge = new OpenAIS2SBridge(tenant);
+    const sipHeaders = {
+      'x-amd-enabled': req.get('x-amd-enabled') || req.get('X-AMD-Enabled'),
+      'x-stt-enabled': req.get('x-stt-enabled') || req.get('X-STT-Enabled'),
+      'x-tenant-id': req.get('x-tenant-id') || req.get('X-Tenant-ID')
+    };
+
+    bridge = new OpenAIS2SBridge(tenant, sipHeaders);
     activeBridges.set(callId, bridge);
 
     dialog.on('destroy', async () => {

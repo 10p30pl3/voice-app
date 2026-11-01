@@ -24,3 +24,18 @@ services:
     volumes:
       - ./recordings:/recordings
     restart: unless-stopped
+
+  whisper:
+    build:
+      context: ./whisper-service
+      dockerfile: Dockerfile
+    container_name: whisper-ai
+    ports:
+      - "8080:8080"
+    environment:
+      - WHISPER_MODEL_SIZE=small
+      - WHISPER_DEVICE=auto
+      - WHISPER_COMPUTE_TYPE=auto
+      - WHISPER_MAX_BATCH_SIZE=8
+      - WHISPER_BATCH_WINDOW_SEC=0.040
+    restart: unless-stopped
