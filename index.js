@@ -169,8 +169,8 @@ class OpenAIS2SBridge {
 
     this.profiles = {
       SILENCE: {
-        fone: { base: 0.45, prefix: 350, silence: 400 },
-        viva: { base: 0.45, prefix: 400, silence: 500 }
+        fone: { base: 0.38, prefix: 200, silence: 350 },
+        viva: { base: 0.45, prefix: 250, silence: 400 }
       },
       OFFICE: {
         fone: { base: 0.55, prefix: 400, silence: 500 },
@@ -288,7 +288,7 @@ class OpenAIS2SBridge {
         }
       } else if (body.type === 'response.cancelled') {
         this.isAgentTalking = false;
-        this.mediaBridge.endPlaybackStream();
+        this.mediaBridge.killAudio();
       }
 
       if (body.type === 'response.output_audio.delta' && body.delta) {
@@ -310,13 +310,15 @@ class OpenAIS2SBridge {
       }
 
       if (body.type === 'input_audio_buffer.speech_started') {
-        console.log(`[${this.callId}] 🎤 BARGE-IN: Usuário falou! Interrompendo agente...`);
+        console.log(`[${this.callId}] 🎤 BARGE-IN: Usuário falou! Interrompendo agente imediatamente...`);
         this.isAgentTalking = false;
-        this.mediaBridge.endPlaybackStream();
+        // Purga instantaneamente qualquer áudio acumulado no buffer de playout do mod_audio_fork
+        this.mediaBridge.killAudio();
         if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
           this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
         }
         if (this.endpoint && this.channelUuid) {
+          this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
           this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
         }
       }

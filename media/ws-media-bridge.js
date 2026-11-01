@@ -318,6 +318,22 @@ class WsMediaBridge {
     this.isPlaying = false;
   }
 
+  killAudio() {
+    this.isPlaying = false;
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      try {
+        // Envia mensagem JSON nativa do mod_audio_fork para descarte imediato do buffer de áudio
+        this.socket.send(JSON.stringify({ type: 'killAudio' }));
+      } catch (e) {
+        console.error(`[${this.callId}] Erro ao enviar killAudio via WS:`, e.message);
+      }
+    }
+    if (this.endpoint && this.channelUuid) {
+      // Dispara stop_play na API do FreeSWITCH para zerar os ponteiros de playout buffer no C++
+      this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
+    }
+  }
+
   async stop() {
     if (this.stopped) return;
     this.stopped = true;
