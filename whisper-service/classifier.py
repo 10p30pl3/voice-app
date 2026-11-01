@@ -33,8 +33,8 @@ PATTERNS_CAIXA_POSTAL = [
     r'recado de voz',
 ]
 
-# Padrões Semânticos de Fala Humana (Saudações Receptivas e Perguntas)
-PATTERNS_HUMANO = [
+# Padrões Fortes Dialógicos / Interrogativos de Fala Humana
+PATTERNS_HUMANO_FORTE = [
     r'\bal[oô]\b',
     r'\bpronto\b',
     r'\bpois n[aã]o\b',
@@ -42,6 +42,11 @@ PATTERNS_HUMANO = [
     r'\bquem [eé]\b',
     r'\bpode falar\b',
     r'\bcom quem (?:deseja|quer) falar\b',
+    r'\bquem gostaria\b',
+]
+
+# Saudações Curtas (Só valem como Fast-Path Humano se a fala for curta <= 1300ms e <= 5 palavras)
+PATTERNS_SAUDACAO_CURTA = [
     r'\bbom dia\b',
     r'\bboa tarde\b',
     r'\bboa noite\b',
@@ -49,12 +54,13 @@ PATTERNS_HUMANO = [
     r'\bol[aá]\b',
     r'\bsim\b',
     r'\bdiga\b',
-    r'\bfala\b',
 ]
 
 COMPILED_OPERADORA = [re.compile(p, re.IGNORECASE) for p in PATTERNS_OPERADORA]
 COMPILED_CAIXA_POSTAL = [re.compile(p, re.IGNORECASE) for p in PATTERNS_CAIXA_POSTAL]
-COMPILED_HUMANO = [re.compile(p, re.IGNORECASE) for p in PATTERNS_HUMANO]
+COMPILED_HUMANO_FORTE = [re.compile(p, re.IGNORECASE) for p in PATTERNS_HUMANO_FORTE]
+COMPILED_SAUDACAO_CURTA = [re.compile(p, re.IGNORECASE) for p in PATTERNS_SAUDACAO_CURTA]
+
 
 class AMDClassifier:
     def __init__(self, model_path: str = None):
@@ -78,6 +84,7 @@ class AMDClassifier:
         Retorna dicionário com { label, confidence, reason, probas }
         """
         clean_text = (text or "").strip().lower()
+        word_count = len(clean_text.split()) if clean_text else 0
 
         # 1. Regra de Silêncio Absoluto
         if speech_ms < 150:
@@ -88,7 +95,7 @@ class AMDClassifier:
                 "probas": {"silencio": 0.98, "humano": 0.02, "caixa_postal": 0.0, "operadora": 0.0}
             }
 
-        # 2. Se for Early Media (183 Session Progress), só decide 'operadora' se encontrar padrão forte
+        # 2. Padrão de Operadora
         for pat in COMPILED_OPERADORA:
             if pat.search(clean_text):
                 return {
@@ -99,7 +106,6 @@ class AMDClassifier:
                 }
 
         if is_early_media:
-            # Em early media, se não é operadora declarada, espera atendimento
             return {
                 "label": "aguardando_200ok",
                 "confidence": 0.50,
@@ -107,7 +113,7 @@ class AMDClassifier:
                 "probas": {"humano": 0.50, "operadora": 0.50, "caixa_postal": 0.0, "silencio": 0.0}
             }
 
-        # 3. Verificação de Padrão Caixa Postal
+        # 3. Padrão Explícito de Caixa Postal
         for pat in COMPILED_CAIXA_POSTAL:
             if pat.search(clean_text):
                 return {
@@ -117,26 +123,51 @@ class AMDClassifier:
                     "probas": {"caixa_postal": 0.95, "humano": 0.05, "operadora": 0.0, "silencio": 0.0}
                 }
 
-        # 4. Verificação de Padrão Humano (Saudação ou Pergunta Receptiva)
-        human_matches = sum(1 for pat in COMPILED_HUMANO if pat.search(clean_text))
-        if human_matches > 0:
-            # Fast-path: fala curta seguida de silêncio com saudação
-            if speech_ms <= 1300:
-                return {
-                    "label": "humano",
-                    "confidence": 0.92,
-                    "reason": "short_human_greeting",
-                    "probas": {"humano": 0.92, "caixa_postal": 0.05, "operadora": 0.03, "silencio": 0.0}
-                }
-            else:
-                return {
-                    "label": "humano",
-                    "confidence": 0.85,
-                    "reason": "human_dialogic_structure",
-                    "probas": {"humano": 0.85, "caixa_postal": 0.10, "operadora": 0.05, "silencio": 0.0}
-                }
+        # 4. Se houver modelo de ML treinado, avalia antes das heurísticas genéricas quando a fala for longa
+        if self.ml_pipeline is not None and len(clean_text) >= 3 and speech_ms > 1300:
+            try:
+                probas = self.ml_pipeline.predict_proba([clean_text])[0]
+                classes = self.ml_pipeline.classes_
+                prob_map = {cls: float(p) for cls, p in zip(classes, probas)}
+                best_class = max(prob_map, key=prob_map.get)
+                confidence = prob_map[best_class]
 
-        # 5. Se houver modelo de ML treinado, aplica predição estatística
+                if best_class in ('caixa_postal', 'operadora') and confidence >= 0.90:
+                    return {
+                        "label": best_class,
+                        "confidence": confidence,
+                        "reason": "ml_pipeline_high_confidence",
+                        "probas": prob_map
+                    }
+                elif best_class == 'humano' and confidence >= 0.55:
+                    return {
+                        "label": "humano",
+                        "confidence": confidence,
+                        "reason": "ml_pipeline_human",
+                        "probas": prob_map
+                    }
+            except Exception:
+                pass
+
+        # 5. Padrão Forte Dialógico Humano ("Alô", "Quem fala?", "Pois não")
+        if any(pat.search(clean_text) for pat in COMPILED_HUMANO_FORTE):
+            return {
+                "label": "humano",
+                "confidence": 0.92 if speech_ms <= 1500 else 0.85,
+                "reason": "strong_human_dialogic_pattern",
+                "probas": {"humano": 0.90, "caixa_postal": 0.07, "operadora": 0.03, "silencio": 0.0}
+            }
+
+        # 6. Saudação Curta ("Oi?", "Bom dia?") -> Somente se fala curta (<= 1300ms e <= 5 palavras)
+        if speech_ms <= 1300 and word_count <= 5 and any(pat.search(clean_text) for pat in COMPILED_SAUDACAO_CURTA):
+            return {
+                "label": "humano",
+                "confidence": 0.88,
+                "reason": "short_human_greeting",
+                "probas": {"humano": 0.88, "caixa_postal": 0.08, "operadora": 0.04, "silencio": 0.0}
+            }
+
+        # 7. Se houver modelo ML e ainda não decidiu nas falas curtas
         if self.ml_pipeline is not None and len(clean_text) >= 3:
             try:
                 probas = self.ml_pipeline.predict_proba([clean_text])[0]
@@ -145,7 +176,6 @@ class AMDClassifier:
                 best_class = max(prob_map, key=prob_map.get)
                 confidence = prob_map[best_class]
 
-                # Aplica assimetria de segurança: máquina só se confiança >= 0.90
                 if best_class in ('caixa_postal', 'operadora') and confidence >= 0.90:
                     return {
                         "label": best_class,
@@ -153,19 +183,16 @@ class AMDClassifier:
                         "reason": "ml_pipeline_high_confidence",
                         "probas": prob_map
                     }
-                else:
-                    # Na dúvida, favorece humano
-                    return {
-                        "label": "humano",
-                        "confidence": prob_map.get("humano", 0.60),
-                        "reason": "ml_pipeline_fallback_human",
-                        "probas": prob_map
-                    }
-            except Exception as e:
+                return {
+                    "label": "humano",
+                    "confidence": prob_map.get("humano", 0.60),
+                    "reason": "ml_pipeline_fallback_human",
+                    "probas": prob_map
+                }
+            except Exception:
                 pass
 
-        # 6. Heurística de Cadência Temporal quando texto é inconclusivo:
-        # Fala contínua longa sem pausas (> 2500ms) tende a ser secretária eletrônica gravada
+        # 8. Heurística de Cadência Temporal para fala contínua longa sem padrão humano
         if speech_ms >= 2400:
             return {
                 "label": "caixa_postal",
@@ -174,7 +201,6 @@ class AMDClassifier:
                 "probas": {"caixa_postal": 0.75, "humano": 0.25, "operadora": 0.0, "silencio": 0.0}
             }
 
-        # Padrão: na dúvida, trata como Humano (errar a favor do cliente)
         return {
             "label": "humano",
             "confidence": 0.60,

@@ -2,7 +2,8 @@ import asyncio
 import time
 import os
 import numpy as np
-from typing import List, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import List
 from faster_whisper import WhisperModel
 
 INITIAL_PROMPT_PT = (
@@ -22,45 +23,49 @@ class BatchTask:
 class PriorityInferenceWorker:
     def __init__(self):
         self.model_size = os.getenv("WHISPER_MODEL_SIZE", "small")
-        self.device = os.getenv("WHISPER_DEVICE", "auto") # "cuda" ou "cpu"
-        self.compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "auto") # "float16", "int8_float16", "int8"
+        self.device = os.getenv("WHISPER_DEVICE", "auto")
+        self.compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "auto")
+        self.num_workers = int(os.getenv("WHISPER_NUM_WORKERS", "4"))
         self.max_batch_size = int(os.getenv("WHISPER_MAX_BATCH_SIZE", "8"))
-        self.micro_batch_window_sec = float(os.getenv("WHISPER_BATCH_WINDOW_SEC", "0.040")) # 40ms
+        self.micro_batch_window_sec = float(os.getenv("WHISPER_BATCH_WINDOW_SEC", "0.040"))
 
         self.queue: List[BatchTask] = []
         self.lock = asyncio.Lock()
         self.running = False
         self.model = None
+        self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
 
     def load_model(self):
-        print(f"[PriorityWorker] Carregando modelo Whisper '{self.model_size}' (Device: {self.device}, Compute: {self.compute_type})...")
+        print(
+            f"[PriorityWorker] Carregando modelo Whisper '{self.model_size}' "
+            f"(Device: {self.device}, Compute: {self.compute_type}, Workers C++: {self.num_workers})..."
+        )
         self.model = WhisperModel(
             self.model_size,
             device=self.device,
-            compute_type=self.compute_type
+            compute_type=self.compute_type,
+            num_workers=self.num_workers
         )
-        # Warmup inicial com 1s de áudio dummy
         dummy = np.zeros(16000, dtype=np.float32)
         try:
-            self.model.transcribe(dummy, language="pt", beam_size=1)
+            segments, _ = self.model.transcribe(dummy, language="pt", beam_size=1)
+            list(segments)
             print("[PriorityWorker] ✅ Warmup concluído com sucesso!")
         except Exception as e:
             print(f"[PriorityWorker] Warmup avisou: {e}")
 
     async def start(self):
         self.running = True
-        loop = asyncio.get_event_loop()
-        # Carrega o modelo em thread pool para não bloquear o loop de eventos
-        await loop.run_in_executor(None, self.load_model)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self.executor, self.load_model)
         asyncio.create_task(self._worker_loop())
 
     async def submit_task(self, audio_np: np.ndarray, priority: int = 1, initial_prompt: str = None) -> str:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future = loop.create_future()
         task = BatchTask(priority, audio_np, initial_prompt, future)
 
         async with self.lock:
-            # Insere ordenado por prioridade (menor número = maior prioridade: 0 > 1 > 2)
             inserted = False
             for i, t in enumerate(self.queue):
                 if task.priority < t.priority:
@@ -73,14 +78,13 @@ class PriorityInferenceWorker:
         return await future
 
     async def _worker_loop(self):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         while self.running:
             if not self.queue:
                 await asyncio.sleep(0.005)
                 continue
 
-            # Aguarda até 40ms para permitir formação de micro-batch dinâmico
             await asyncio.sleep(self.micro_batch_window_sec)
 
             async with self.lock:
@@ -90,37 +94,40 @@ class PriorityInferenceWorker:
             if not batch_tasks:
                 continue
 
-            # Processa o lote no thread pool
+            # Executa todas as tasks do micro-batch simultaneamente nos workers C++/CUDA do CTranslate2 (que libera o GIL)
             try:
-                results = await loop.run_in_executor(None, self._process_batch, batch_tasks)
+                results = await asyncio.gather(
+                    *[loop.run_in_executor(self.executor, self._transcribe_single, task) for task in batch_tasks],
+                    return_exceptions=True
+                )
                 for task, result in zip(batch_tasks, results):
                     if not task.future.done():
-                        task.future.set_result(result)
+                        if isinstance(result, Exception):
+                            task.future.set_result("")
+                        else:
+                            task.future.set_result(result)
             except Exception as e:
                 for task in batch_tasks:
                     if not task.future.done():
                         task.future.set_exception(e)
 
-    def _process_batch(self, tasks: List[BatchTask]) -> List[str]:
-        results = []
-        for task in tasks:
-            try:
-                segments, _ = self.model.transcribe(
-                    task.audio_np,
-                    language="pt",
-                    beam_size=1,
-                    best_of=1,
-                    temperature=0.0,
-                    condition_on_previous_text=False,
-                    without_timestamps=True,
-                    initial_prompt=task.initial_prompt
-                )
-                text = " ".join([s.text for s in segments]).strip()
-                results.append(text)
-            except Exception as err:
-                print(f"[PriorityWorker] Erro na transcrição de task: {err}")
-                results.append("")
-        return results
+    def _transcribe_single(self, task: BatchTask) -> str:
+        try:
+            segments, _ = self.model.transcribe(
+                task.audio_np,
+                language="pt",
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                without_timestamps=True,
+                initial_prompt=task.initial_prompt
+            )
+            return " ".join([s.text for s in segments]).strip()
+        except Exception as err:
+            print(f"[PriorityWorker] Erro na transcrição de task: {err}")
+            return ""
 
     def stop(self):
         self.running = False
+        self.executor.shutdown(wait=False)

@@ -402,8 +402,10 @@ class OpenAIS2SBridge {
       callId: this.callId,
       endpoint: this.endpoint,
       onAudio: (buffer) => {
-        // Encaminha áudio ao Whisper para AMD e/ou STT
-        if (this.whisperSession) {
+        if (this.isTerminated) return;
+
+        // Encaminha áudio ao Whisper para AMD e/ou STT (ignorando o tom de calibração 425Hz do Sonar)
+        if (this.whisperSession && !this.isToneProbe) {
           this.whisperSession.pushAudio(buffer, 8000);
         }
 
@@ -420,7 +422,19 @@ class OpenAIS2SBridge {
           this.energyManager.calculateEnergy(buffer, isEcoSample);
         }
 
-        if (this.openaiReady && this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+        // Se o AMD ativo ainda está decidindo, não envia áudio da operadora/caixa postal para a OpenAI
+        const amdStillDeciding =
+          this.whisperSession &&
+          this.whisperSession.isAmdEnabled &&
+          this.whisperSession.amdMode === 'active' &&
+          !this.whisperSession.decisionReceived;
+
+        if (
+          !amdStillDeciding &&
+          this.openaiReady &&
+          this.openaiSocket &&
+          this.openaiSocket.readyState === WebSocket.OPEN
+        ) {
           const outboundAudio = this.useG711 ? linear16ToMulaw(buffer) : upsample8to24(buffer);
           this.openaiSocket.send(
             JSON.stringify({
@@ -431,6 +445,15 @@ class OpenAIS2SBridge {
         }
       }
     });
+
+    // 4. Se o AMD estiver ligado na chamada, aguarda a classificação antes de tocar o Sonar ou falar na OpenAI
+    if (this.whisperSession && this.whisperSession.isAmdEnabled) {
+      console.log(`[${this.callId}] 🕵️ Aguardando análise do Detector de Secretária (AMD)...`);
+      await this.whisperSession.waitForDecision();
+      if (this.isTerminated) {
+        return; // Chamada encerrada pelo AMD (caixa_postal / operadora / silencio) sem gastar tokens OpenAI!
+      }
+    }
 
     const bargeinLevel = this.tenant.bargeinLevel ?? 3;
 
@@ -478,6 +501,8 @@ class OpenAIS2SBridge {
       this.endpoint.play('tone_stream://v=-13;%(500,0,425)').catch(() => {});
       await wait(500);
     }
+
+    if (this.isTerminated) return;
 
     // 5. Aguarda confirmação do handshake OpenAI
     if (!this.openaiReady && this.openaiReadyPromise) {
