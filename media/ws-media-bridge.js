@@ -241,7 +241,13 @@ class WsMediaBridge {
     mediaServerSingleton.registerSession(this.channelUuid, this);
 
     const wsUrl = `ws://${AUDIO_FORK_WS_HOST}:${port}/media/${this.channelUuid}`;
-    const cmd = `uuid_audio_fork ${this.channelUuid} start ${wsUrl} mono 8000`;
+    // Habilita streaming bidirecional de áudio binário em mod_audio_fork:
+    // argv[5]: bugname (default)
+    // argv[6]: metadata ({})
+    // argv[7]: bidirectionalAudio_enabled (true)
+    // argv[8]: bidirectionalAudio_stream_enabled (true - aceita frames binários L16 do WebSocket para tocar no canal)
+    // argv[9]: bidirectionalAudio_stream_samplerate (8000 Hz)
+    const cmd = `uuid_audio_fork ${this.channelUuid} start ${wsUrl} mono 8000 default {} true true 8000`;
     console.log(`[${this.callId}] Iniciando mod_audio_fork na porta ${port}: ${cmd}`);
 
     const response = await this.endpoint.api(cmd);
