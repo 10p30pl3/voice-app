@@ -153,6 +153,7 @@ const API_COMMANDS_CATALOG = [
 
 function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, mediaServer, originateCallHandler }) {
   const defaultRecDir = process.env.RECORDING_DIR || path.join(__dirname, '..', 'recordings');
+  const dashboardHtmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
 
   return async function handleApiRequest(req, res) {
     if (req.method === 'OPTIONS') {
@@ -162,6 +163,28 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
 
     const parsedUrl = new URL(req.url, 'http://localhost');
     const pathname = parsedUrl.pathname.replace(/\/+$/, '') || '/';
+
+    // Rota do Front-End de Acompanhamento em Tempo Real (Dashboard)
+    if ((req.method === 'GET' || req.method === 'HEAD') && (pathname === '/' || pathname === '/dashboard' || pathname === '/ui')) {
+      try {
+        if (fs.existsSync(dashboardHtmlPath)) {
+          const html = await fs.promises.readFile(dashboardHtmlPath, 'utf8');
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': Buffer.byteLength(html),
+            'Cache-Control': 'no-cache'
+          });
+          if (req.method === 'HEAD') {
+            res.end();
+          } else {
+            res.end(html);
+          }
+          return true;
+        }
+      } catch (err) {
+        console.error('[Dashboard] Erro ao carregar dashboard.html:', err.message);
+      }
+    }
 
     if (!pathname.startsWith('/v1') && !pathname.startsWith('/api/v1')) {
       return false;

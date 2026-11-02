@@ -612,6 +612,18 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
     });
   }
 
+  // 9.0 Front-End de Acompanhamento em Tempo Real (GET / e GET /dashboard)
+  const feRes = await new Promise((resolve, reject) => {
+    http.get(`http://127.0.0.1:${apiPort}/`, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+    }).on('error', reject);
+  });
+  assert.strictEqual(feRes.status, 200);
+  assert.ok(feRes.headers['content-type'].includes('text/html'));
+  assert.ok(feRes.body.includes('Voice-App Gateway AI | Painel de Acompanhamento'));
+
   // 9.1 Catálogo de comandos e Status do Cluster
   const catRes = await apiReq('GET', '/v1/commands');
   assert.strictEqual(catRes.status, 200);
