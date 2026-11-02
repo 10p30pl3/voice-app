@@ -992,38 +992,6 @@
         </div>
       </div>
 
-      <!-- PAINEL DE FEATURES DE VOZ & DSP -->
-      <div class="voice-features-container">
-        <div class="voice-features-header">
-          <div class="vfh-title-group">
-            <div class="vfh-icon-badge">🎛️</div>
-            <div>
-              <div class="vfh-title">
-                Features da Plataforma de Voz
-                <span class="vfh-active-count" id="vf-active-pill">Carregando...</span>
-              </div>
-              <div class="vfh-desc" id="features-summary-text">Cancelamento de eco (AEC Sonar 425Hz), medição de ruído dinâmico, codec G.711 μ-law, gravação estéreo e proteção de custos.</div>
-            </div>
-          </div>
-          <div class="vfh-actions">
-            <button class="btn btn-sm" id="btn-toggle-vf" onclick="toggleVoiceFeaturesView()">
-              <span id="lbl-vf-toggle">Recolher Detalhes ▲</span>
-            </button>
-            <button class="btn btn-sm" onclick="fetchVoiceFeatures()">Atualizar</button>
-          </div>
-        </div>
-
-        <!-- Quick Status Chips Bar -->
-        <div class="vf-chips-bar" id="vf-chips-bar">
-          <span style="color: var(--text-muted); font-size: 11px;">Carregando status das features de voz...</span>
-        </div>
-
-        <!-- Grid de Cards Detalhados das Features -->
-        <div class="vf-cards-grid" id="vf-cards-grid">
-          <!-- Renderizado dinamicamente via JS a partir de /v1/features -->
-        </div>
-      </div>
-
       <div class="calls-header">
         <div class="section-title">
           <span>Chamadas em Andamento</span>
@@ -1127,13 +1095,26 @@
 
     <!-- TAB 5: FEATURES DE VOZ (VISÃO COMPLETA & TELEMETRIA) -->
     <section id="tab-features" class="tab-content">
-      <div class="calls-header">
-        <div class="section-title">
-          <span>🎛️ Features da Plataforma de Voz & Motores DSP</span>
-          <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);" id="lbl-vf-tab-summary">Status em tempo real de cancelamento de eco, medição de ruído, codecs e IA</span>
+      <div class="voice-features-container" style="margin-bottom: 20px;">
+        <div class="voice-features-header" style="margin-bottom: 0;">
+          <div class="vfh-title-group">
+            <div class="vfh-icon-badge">🎛️</div>
+            <div>
+              <div class="vfh-title">
+                Features da Plataforma de Voz & Motores DSP
+                <span class="vfh-active-count" id="vf-active-pill">Carregando...</span>
+              </div>
+              <div class="vfh-desc" id="features-summary-text">Cancelamento de eco (AEC Sonar 425Hz), medição de ruído dinâmico, codec G.711 μ-law, gravação estéreo e proteção de custos.</div>
+            </div>
+          </div>
+          <div class="vfh-actions">
+            <button class="btn btn-sm btn-primary" onclick="fetchVoiceFeatures()">Atualizar Status</button>
+          </div>
         </div>
-        <div>
-          <button class="btn btn-sm" onclick="fetchVoiceFeatures()">Atualizar Status</button>
+
+        <!-- Quick Status Chips Bar -->
+        <div class="vf-chips-bar" id="vf-chips-bar">
+          <span style="color: var(--text-muted); font-size: 11px;">Carregando status das features de voz...</span>
         </div>
       </div>
 
@@ -2056,7 +2037,6 @@
     // VOICE FEATURES MONITORING & TELEMETRY
     // -------------------------------------------------------------
     let cachedVoiceFeatures = [];
-    let vfCardsCollapsed = localStorage.getItem('vf_cards_collapsed') === 'true';
     let currentVfCategoryFilter = 'all';
 
     async function fetchVoiceFeatures() {
@@ -2082,26 +2062,9 @@
         }
 
         renderVoiceFeaturesChips(features);
-        renderVoiceFeaturesCards(features);
         renderVoiceFeaturesFullTab(features);
       } catch (err) {
         console.error('Erro ao carregar features de voz:', err);
-      }
-    }
-
-    function toggleVoiceFeaturesView() {
-      vfCardsCollapsed = !vfCardsCollapsed;
-      localStorage.setItem('vf_cards_collapsed', String(vfCardsCollapsed));
-      const grid = document.getElementById('vf-cards-grid');
-      const lbl = document.getElementById('lbl-vf-toggle');
-      if (grid) {
-        if (vfCardsCollapsed) {
-          grid.classList.add('collapsed');
-          if (lbl) lbl.textContent = 'Ver Detalhes ▼';
-        } else {
-          grid.classList.remove('collapsed');
-          if (lbl) lbl.textContent = 'Recolher Detalhes ▲';
-        }
       }
     }
 
@@ -2121,22 +2084,6 @@
           </div>
         `;
       }).join('');
-    }
-
-    function renderVoiceFeaturesCards(features) {
-      const container = document.getElementById('vf-cards-grid');
-      if (!container) return;
-
-      const lbl = document.getElementById('lbl-vf-toggle');
-      if (vfCardsCollapsed) {
-        container.classList.add('collapsed');
-        if (lbl) lbl.textContent = 'Ver Detalhes ▼';
-      } else {
-        container.classList.remove('collapsed');
-        if (lbl) lbl.textContent = 'Recolher Detalhes ▲';
-      }
-
-      container.innerHTML = features.map(f => createFeatureCardHtml(f)).join('');
     }
 
     function renderVoiceFeaturesFullTab(features) {
