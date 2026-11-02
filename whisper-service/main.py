@@ -124,8 +124,8 @@ async def audio_stream_endpoint(
     if spk_threshold is None:
         spk_threshold = DEFAULT_THRESHOLDS[model_key_of(spk_filter)]
 
-    # Verificação de locutor em janela deslizante (durante a fala)
-    spk_stream = SpeakerStream(call_id, spk_filter, spk_threshold) if is_spk_active else None
+    # Verificação de locutor em janela deslizante (durante a fala a 8kHz da telefonia)
+    spk_stream = SpeakerStream(call_id, spk_filter, spk_threshold, sample_rate=8000) if is_spk_active else None
 
     BASE_VAD_THRESHOLD = 0.015
     noise_floor = 0.008

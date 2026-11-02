@@ -35,6 +35,26 @@ def model_key_of(model_name: str) -> str:
     return "ecapa" if "ecapa" in (model_name or "").lower() else "wespeaker"
 
 
+def resample_to_16k(audio_float32: np.ndarray, source_rate: int = 8000) -> np.ndarray:
+    """
+    Upsampling rápido para 16kHz via interpolação linear vetorial.
+    Telefonia (FreeSWITCH) transmite a 8000 Hz; os modelos ONNX (CAM++ e ECAPA-TDNN)
+    foram treinados em 16000 Hz. A interpolação garante alinhamento acústico exato do Kaldi Fbank.
+    """
+    if source_rate == SAMPLE_RATE or len(audio_float32) == 0:
+        return audio_float32
+    if source_rate == 8000:
+        n = len(audio_float32)
+        out = np.empty(n * 2, dtype=np.float32)
+        out[0::2] = audio_float32
+        out[1:-1:2] = 0.5 * (audio_float32[:-1] + audio_float32[1:])
+        out[-1] = audio_float32[-1]
+        return out
+    x_old = np.linspace(0, 1, len(audio_float32), endpoint=False)
+    x_new = np.linspace(0, 1, int(len(audio_float32) * (SAMPLE_RATE / source_rate)), endpoint=False)
+    return np.interp(x_new, x_old, audio_float32).astype(np.float32)
+
+
 def compute_fbank(audio_float32: np.ndarray) -> np.ndarray:
     """
     Kaldi 80-dim log-mel fbank (25ms / 10ms, hamming, sem dither) + CMN.
@@ -93,13 +113,16 @@ class SpeakerVerifierManager:
     def models_available(self) -> dict:
         return {k: os.path.exists(p) for k, p in MODEL_PATHS.items()}
 
-    def extract_embedding(self, audio_float32: np.ndarray, model_name: str = "wespeaker") -> np.ndarray:
-        """Vetor embedding (512-dim L2 normalizado) de áudio 16kHz float32 [-1.0, 1.0]."""
-        if len(audio_float32) < 3200:  # mínimo 200ms
+    def extract_embedding(self, audio_float32: np.ndarray, model_name: str = "wespeaker",
+                          source_rate: int = 8000) -> np.ndarray:
+        """Vetor embedding (512-dim L2 normalizado) compatível com áudio telefônico (8kHz) ou 16kHz."""
+        min_samples = int(0.2 * source_rate)  # mínimo 200ms
+        if len(audio_float32) < min_samples:
             return np.zeros(512, dtype=np.float32)
 
         session = self._get_session(model_name)
-        feats = compute_fbank(audio_float32)
+        audio_16k = resample_to_16k(audio_float32, source_rate=source_rate)
+        feats = compute_fbank(audio_16k)
         if feats.shape[0] < 20:
             return np.zeros(512, dtype=np.float32)
 
@@ -117,9 +140,10 @@ class SpeakerVerifierManager:
             return 0.0
         return float(np.dot(e1, e2) / (n1 * n2))
 
-    def enroll(self, call_id: str, audio_float32: np.ndarray, model_name: str = "wespeaker") -> dict:
+    def enroll(self, call_id: str, audio_float32: np.ndarray, model_name: str = "wespeaker",
+               source_rate: int = 8000) -> dict:
         """Cadastra a assinatura vocal do titular (embedding de fala >= ~1s)."""
-        emb = self.extract_embedding(audio_float32, model_name=model_name)
+        emb = self.extract_embedding(audio_float32, model_name=model_name, source_rate=source_rate)
         if np.linalg.norm(emb) < 1e-3:
             return {"success": False, "reason": "audio_too_short"}
 
@@ -134,11 +158,11 @@ class SpeakerVerifierManager:
             "success": True,
             "call_id": call_id,
             "model": model_key,
-            "duration_s": round(len(audio_float32) / float(SAMPLE_RATE), 2)
+            "duration_s": round(len(audio_float32) / float(source_rate), 2)
         }
 
     def verify(self, call_id: str, audio_float32: np.ndarray, model_name: str = "wespeaker",
-               threshold: float = None) -> dict:
+               threshold: float = None, source_rate: int = 8000) -> dict:
         """Verifica se o áudio recente pertence ao titular cadastrado."""
         model_key = model_key_of(model_name)
         if threshold is None:
@@ -150,7 +174,7 @@ class SpeakerVerifierManager:
             return {"enrolled": False, "is_match": True, "similarity": 1.0,
                     "threshold": threshold, "model": model_key}
 
-        emb = self.extract_embedding(audio_float32, model_name=model_name)
+        emb = self.extract_embedding(audio_float32, model_name=model_name, source_rate=source_rate)
         if np.linalg.norm(emb) < 1e-3:
             # Janela curta demais para decidir: não bloqueia
             return {"enrolled": True, "is_match": True, "similarity": 1.0,
@@ -187,18 +211,21 @@ class SpeakerStream:
     e deve ser chamado fora do event loop (asyncio.to_thread).
     """
 
-    def __init__(self, call_id: str, model_name: str, threshold: float,
-                 enroll_samples=int(1.5 * SAMPLE_RATE), min_window=int(1.0 * SAMPLE_RATE),
-                 max_window=int(1.5 * SAMPLE_RATE), step=int(0.4 * SAMPLE_RATE),
-                 idle_samples=int(0.3 * SAMPLE_RATE), manager: SpeakerVerifierManager = None):
+    def __init__(self, call_id: str, model_name: str, threshold: float = None,
+                 sample_rate: int = 8000,
+                 enroll_sec: float = 1.2, min_window_sec: float = 0.8,
+                 max_window_sec: float = 1.5, step_sec: float = 0.3,
+                 idle_sec: float = 0.3, manager: SpeakerVerifierManager = None):
         self.call_id = call_id
         self.model_name = model_name
-        self.threshold = threshold
-        self.enroll_samples = enroll_samples
-        self.min_window = min_window
-        self.max_window = max_window
-        self.step = step
-        self.idle_samples = idle_samples
+        self.sample_rate = sample_rate
+        model_key = model_key_of(model_name)
+        self.threshold = threshold if threshold is not None else DEFAULT_THRESHOLDS[model_key]
+        self.enroll_samples = int(enroll_sec * sample_rate)
+        self.min_window = int(min_window_sec * sample_rate)
+        self.max_window = int(max_window_sec * sample_rate)
+        self.step = int(step_sec * sample_rate)
+        self.idle_samples = int(idle_sec * sample_rate)
         self.mgr = manager or speaker_verifier
 
         self.frames = []
@@ -247,7 +274,7 @@ class SpeakerStream:
         self.new_samples = 0
 
         if work == "enroll":
-            res = self.mgr.enroll(self.call_id, audio, model_name=self.model_name)
+            res = self.mgr.enroll(self.call_id, audio, model_name=self.model_name, source_rate=self.sample_rate)
             if res.get("success"):
                 self.enrolled = True
                 return {"type": "speaker_enrolled", "call_id": self.call_id,
@@ -255,7 +282,8 @@ class SpeakerStream:
             return None
 
         if work == "verify":
-            res = self.mgr.verify(self.call_id, audio, model_name=self.model_name, threshold=self.threshold)
+            res = self.mgr.verify(self.call_id, audio, model_name=self.model_name,
+                                  threshold=self.threshold, source_rate=self.sample_rate)
             if res.get("inconclusive"):
                 return None
             # Histerese: bloqueia com rejeição forte (1 janela) ou 2 janelas consecutivas abaixo do limiar
@@ -267,5 +295,5 @@ class SpeakerStream:
             is_match = True if (res["is_match"] or (not hard and self.reject_run < CONSECUTIVE_REJECTS)) else False
             return {"type": "speaker_verification", "call_id": self.call_id, "model": res["model"],
                     "is_match": is_match, "raw_match": res["is_match"], "similarity": res["similarity"],
-                    "threshold": res["threshold"], "window_s": round(len(audio) / SAMPLE_RATE, 2)}
+                    "threshold": res["threshold"], "window_s": round(len(audio) / float(self.sample_rate), 2)}
         return None
