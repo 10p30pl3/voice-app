@@ -251,7 +251,6 @@ class TenantManager {
       }
       const list = [];
       for (const [id, t] of this.tenants.entries()) {
-        if (id === 'default') continue;
         list.push(t);
       }
       fs.writeFileSync(this.configPath, JSON.stringify(list, null, 2), 'utf8');

@@ -1046,7 +1046,7 @@
       <span class="badge-count zero" id="badge-rec-count">0</span>
     </button>
     <button class="tab-btn" onclick="switchTab('tenants')">
-      <span>🏢 Tenants (Clientes)</span>
+      <span>🏢 Tenants & Prompts da IA</span>
     </button>
     <button class="tab-btn" onclick="switchTab('api')">
       <span>📋 Catálogo de APIs (/v1)</span>
@@ -1143,11 +1143,34 @@
       </div>
     </section>
 
-    <!-- TAB 3: TENANTS -->
+    <!-- TAB 3: TENANTS & PROMPTS DA IA -->
     <section id="tab-tenants" class="tab-content">
+      <!-- Card Destaque: Configuração dos Prompts da IA -->
+      <div style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(139, 92, 246, 0.08)); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 14px; padding: 22px; margin-bottom: 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
+            <span style="font-size: 22px;">🧠</span>
+            <h3 style="font-size: 17px; font-weight: 700; color: #fff;">Configuração de Prompts, Persona e Voz da IA</h3>
+            <span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px;">Hot-Reload em Tempo Real</span>
+          </div>
+          <p style="font-size: 13px; color: var(--text-muted); max-width: 800px; line-height: 1.5;">
+            Configure as instruções de sistema (System Prompt), Prompt ID, modelo e tom de voz da IA. Você pode ajustar o <strong>Tenant Global</strong> (usado por padrão em todas as ligações) ou definir prompts específicos por cliente/DID. As alterações entram em vigor na próxima chamada sem reiniciar o gateway.
+          </p>
+        </div>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <button class="btn btn-primary" onclick="openTenantModal('default')">
+            <span>⚙️ Editar Prompt Global (Default)</span>
+          </button>
+          <button class="btn" onclick="openTenantModal()">
+            <span>+ Novo Cliente / Tenant</span>
+          </button>
+        </div>
+      </div>
+
       <div class="calls-header">
         <div class="section-title">
-          <span>Tenants Configurados (Multi-Tenant Hot-Reload)</span>
+          <span>Tenants & Personas Cadastradas</span>
+          <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);" id="lbl-tenants-summary"></span>
         </div>
         <div>
           <button class="btn btn-sm" onclick="fetchTenantsData()">Recarregar</button>
@@ -1161,15 +1184,16 @@
               <th>ID Tenant</th>
               <th>Nome</th>
               <th>DIDs Mapeados</th>
-              <th>Chamadas Ativas</th>
-              <th>Limites (Canais / CPS)</th>
+              <th style="min-width: 260px;">Prompt / Instruções da IA</th>
               <th>Voz & Modelo</th>
+              <th>Limites (Canais / CPS)</th>
               <th>AMD & STT</th>
+              <th style="text-align: right; min-width: 150px;">Ações</th>
             </tr>
           </thead>
           <tbody id="tenants-table-body">
             <tr>
-              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+              <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
                 Carregando tenants...
               </td>
             </tr>
@@ -1408,6 +1432,151 @@
       <div class="modal-footer">
         <button class="btn" onclick="copyTranscriptText()">Copiar Texto</button>
         <button class="btn btn-primary" onclick="closeModal('modal-transcript-view')">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Configurar Prompt e Tenant da IA -->
+  <div class="modal-overlay" id="modal-tenant-editor">
+    <div class="modal-card" style="max-width: 780px; max-height: 90vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <h3 style="font-size: 16px; display: flex; align-items: center; gap: 8px;" id="tenant-modal-title">
+          <span>🧠 Configurar Prompt da IA</span>
+        </h3>
+        <button class="btn btn-sm" onclick="closeModal('modal-tenant-editor')">✕</button>
+      </div>
+      
+      <div class="modal-body" style="max-height: calc(90vh - 130px); overflow-y: auto; padding: 22px; gap: 18px;">
+        <div style="background: rgba(59, 130, 246, 0.08); border-left: 3px solid var(--primary); padding: 10px 14px; border-radius: 6px; font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+          💡 <strong>Hot-Reload em Tempo Real:</strong> As alterações salvas são aplicadas imediatamente ao tenant. Novas ligações atendidas já utilizarão as novas instruções de voz sem reiniciar o gateway.
+        </div>
+
+        <!-- Seção 1: Prompt e Instruções da IA -->
+        <div class="form-group">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label style="font-weight: 700; color: #fff;">Instruções do Sistema (System Instructions / Prompt):</label>
+            <span id="lbl-char-count" style="font-size: 11px; color: var(--text-dim);">0 caracteres</span>
+          </div>
+          
+          <div style="display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; align-items: center;">
+            <span style="font-size: 11px; color: var(--text-dim);">Exemplos prontos:</span>
+            <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="applyPromptTemplate('atendente')">Assistente Geral</button>
+            <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="applyPromptTemplate('clinica')">Agendamento Clínico</button>
+            <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="applyPromptTemplate('cobranca')">Cobrança Amigável</button>
+            <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 2px 8px;" onclick="applyPromptTemplate('vendas')">Vendas / Qualificação</button>
+          </div>
+
+          <textarea id="tenant-instructions" rows="7" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.5;" placeholder="Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma amigável..." oninput="updateCharCount()"></textarea>
+        </div>
+
+        <!-- Seção 2: Voz, Modelo e Prompt ID -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+          <div class="form-group">
+            <label>OpenAI Prompt ID (Opcional)</label>
+            <input type="text" id="tenant-prompt-id" placeholder="pmpt_699c6d29...">
+            <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Se preenchido, usa o prompt configurado no painel da OpenAI</small>
+          </div>
+
+          <div class="form-group">
+            <label>Voz da IA (OpenAI TTS)</label>
+            <select id="tenant-voice">
+              <option value="alloy">alloy (Neutra / Direta)</option>
+              <option value="echo">echo (Masculina suave)</option>
+              <option value="shimmer">shimmer (Feminina expressiva)</option>
+              <option value="ash">ash (Grave / Calma)</option>
+              <option value="ballad">ballad (Ritmo melódico)</option>
+              <option value="coral">coral (Jovial / Amigável)</option>
+              <option value="sage">sage (Madura / Profissional)</option>
+              <option value="verse">verse (Dinâmica)</option>
+              <option value="marin">marin (Telefônica BR)</option>
+              <option value="cedar">cedar (Profunda)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Modelo OpenAI Realtime</label>
+            <select id="tenant-model">
+              <option value="gpt-realtime-mini">gpt-realtime-mini (Rápido / Baixa Latência)</option>
+              <option value="gpt-realtime">gpt-realtime (Máxima Capacidade Cognitiva)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Codec de Áudio</label>
+            <select id="tenant-codec">
+              <option value="g711_ulaw">G.711 u-law (Nativo Telefonia - Zero Latência)</option>
+              <option value="pcm24k">PCM 24kHz (Alta Fidelidade com Resampling)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Seção 3: Identificação & Rotas SIP -->
+        <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+          <h4 style="font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span>🏢 Identificação & Roteamento SIP</span>
+          </h4>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+            <div class="form-group">
+              <label>ID do Tenant <span style="color:var(--danger)">*</span></label>
+              <input type="text" id="tenant-id" placeholder="ex: clinica-saude">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Identificador único interno (ex: header X-Tenant-ID)</small>
+            </div>
+
+            <div class="form-group">
+              <label>Nome do Cliente / Campanha</label>
+              <input type="text" id="tenant-name" placeholder="ex: Clínica Saúde & Vida">
+            </div>
+
+            <div class="form-group" style="grid-column: span 2;">
+              <label>DIDs Telefônicos Mapeados (separados por vírgula)</label>
+              <input type="text" id="tenant-dids" placeholder="* (ou ex: 551140040001, 1001, 1002)">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Use * para atender qualquer DID ou liste os números autorizados</small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Seção 4: Limites & Features -->
+        <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+          <h4 style="font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span>🛡️ Concorrência, Limites & Telefonia</span>
+          </h4>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;">
+            <div class="form-group">
+              <label>Canais Máximos</label>
+              <input type="number" id="tenant-max-calls" value="200" min="1" max="1000">
+            </div>
+
+            <div class="form-group">
+              <label>CPS Máximo (Calls/s)</label>
+              <input type="number" id="tenant-max-cps" value="30" min="1" max="100">
+            </div>
+
+            <div class="form-group">
+              <label>Timeout (segundos)</label>
+              <input type="number" id="tenant-max-duration" value="180" min="30" max="3600">
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; margin-top: 14px; flex-wrap: wrap;">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="tenant-active" style="width: auto;" checked>
+              <strong>Tenant Ativo</strong>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="tenant-amd" style="width: auto;">
+              <span>AMD (Detecção de Caixa Postal)</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="tenant-stt" style="width: auto;" checked>
+              <span>STT Whisper & Gravação Estéreo</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('modal-tenant-editor')">Cancelar</button>
+        <button class="btn btn-primary" id="btn-save-tenant" onclick="saveTenantFromModal()">💾 Salvar Prompt & Configurações</button>
       </div>
     </div>
   </div>
@@ -2065,46 +2234,251 @@
     }
 
     // -------------------------------------------------------------
-    // TENANTS TAB
+    // TENANTS & PROMPTS TAB
     // -------------------------------------------------------------
+    const PROMPT_TEMPLATES = {
+      atendente: 'Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma acolhedora, objetiva e profissional. Responda em no máximo duas frases curtas por turno para manter a conversa fluida como uma ligação telefônica real.',
+      clinica: 'Você é a secretária virtual da clínica de saúde. Atenda o paciente de forma atenciosa e educada em português brasileiro. Seu objetivo é identificar o paciente, verificar a especialidade médica desejada (Clínica Geral, Cardiologia, Ortopedia) e coletar o melhor dia e período para o agendamento da consulta. Mantenha as respostas curtas e humanas.',
+      cobranca: 'Você é o negociador amigável da central financeira. Converse com empatia e tranquilidade em português brasileiro, confirmando os dados da pessoa chamada e apresentando as condições especiais de quitação e desconto de até 40% disponíveis hoje. Seja sempre cordial, claro e conciso.',
+      vendas: 'Você é o especialista comercial e consultor de vendas. Apresente os benefícios do serviço de forma entusiasta, natural e consultiva em português brasileiro. Faça perguntas objetivas para entender a necessidade do cliente e convide-o a agendar uma demonstração completa.'
+    };
+
+    let cachedTenantsList = [];
+
+    function updateCharCount() {
+      const txt = document.getElementById('tenant-instructions').value || '';
+      const countEl = document.getElementById('lbl-char-count');
+      if (countEl) countEl.textContent = `${txt.length} caracteres`;
+    }
+
+    function applyPromptTemplate(type) {
+      const template = PROMPT_TEMPLATES[type];
+      if (template) {
+        document.getElementById('tenant-instructions').value = template;
+        updateCharCount();
+        showToast(`Template "${type}" aplicado ao campo de prompt!`, 'info');
+      }
+    }
+
+    function openTenantModal(tenantId = null) {
+      const idInput = document.getElementById('tenant-id');
+      const nameInput = document.getElementById('tenant-name');
+      const didsInput = document.getElementById('tenant-dids');
+      const instrInput = document.getElementById('tenant-instructions');
+      const promptIdInput = document.getElementById('tenant-prompt-id');
+      const voiceSelect = document.getElementById('tenant-voice');
+      const modelSelect = document.getElementById('tenant-model');
+      const codecSelect = document.getElementById('tenant-codec');
+      const maxCallsInput = document.getElementById('tenant-max-calls');
+      const maxCpsInput = document.getElementById('tenant-max-cps');
+      const maxDurInput = document.getElementById('tenant-max-duration');
+      const activeCheck = document.getElementById('tenant-active');
+      const amdCheck = document.getElementById('tenant-amd');
+      const sttCheck = document.getElementById('tenant-stt');
+      const titleEl = document.getElementById('tenant-modal-title');
+
+      if (tenantId) {
+        const t = cachedTenantsList.find(item => item.id === tenantId) || {};
+        const isDefault = tenantId === 'default';
+
+        titleEl.innerHTML = isDefault
+          ? '<span>🧠 Configurar Prompt da IA (Tenant Global / Padrão)</span>'
+          : `<span>🧠 Configurar Prompt da IA (${escapeHtml(t.name || t.id)})</span>`;
+
+        idInput.value = t.id || tenantId;
+        idInput.disabled = isDefault;
+        idInput.title = isDefault ? 'O identificador do tenant global é fixo como "default"' : '';
+
+        nameInput.value = t.name || '';
+        didsInput.value = Array.isArray(t.dids) ? t.dids.join(', ') : (t.dids || '*');
+        instrInput.value = t.instructions || '';
+        promptIdInput.value = t.openaiPromptId || '';
+        voiceSelect.value = t.voice || 'alloy';
+        modelSelect.value = t.openaiModel || 'gpt-realtime-mini';
+        codecSelect.value = t.audioCodec || 'g711_ulaw';
+        maxCallsInput.value = t.maxConcurrentCalls || 200;
+        maxCpsInput.value = t.maxCallsPerSecond || 30;
+        maxDurInput.value = t.maxDurationSec || 180;
+        activeCheck.checked = t.active !== false;
+        amdCheck.checked = !!t.amd?.enabled;
+        sttCheck.checked = t.stt?.enabled !== false;
+      } else {
+        titleEl.innerHTML = '<span>🧠 + Novo Tenant / Configurar Prompt da IA</span>';
+        idInput.disabled = false;
+        idInput.value = '';
+        idInput.title = '';
+        nameInput.value = '';
+        didsInput.value = '';
+        instrInput.value = PROMPT_TEMPLATES.atendente;
+        promptIdInput.value = '';
+        voiceSelect.value = 'alloy';
+        modelSelect.value = 'gpt-realtime-mini';
+        codecSelect.value = 'g711_ulaw';
+        maxCallsInput.value = 200;
+        maxCpsInput.value = 30;
+        maxDurInput.value = 180;
+        activeCheck.checked = true;
+        amdCheck.checked = false;
+        sttCheck.checked = true;
+      }
+
+      updateCharCount();
+      openModal('modal-tenant-editor');
+    }
+
+    async function saveTenantFromModal() {
+      const idInput = document.getElementById('tenant-id');
+      const id = idInput.value.trim();
+      if (!id) {
+        return alert('Por favor, informe o ID do tenant (ex: clinica-saude)');
+      }
+
+      const name = document.getElementById('tenant-name').value.trim() || id;
+      const rawDids = document.getElementById('tenant-dids').value.trim();
+      const dids = rawDids ? rawDids.split(',').map(s => s.trim()).filter(Boolean) : ['*'];
+      const instructions = document.getElementById('tenant-instructions').value.trim();
+      const openaiPromptId = document.getElementById('tenant-prompt-id').value.trim() || null;
+      const voice = document.getElementById('tenant-voice').value;
+      const openaiModel = document.getElementById('tenant-model').value;
+      const audioCodec = document.getElementById('tenant-codec').value;
+      const maxConcurrentCalls = parseInt(document.getElementById('tenant-max-calls').value, 10) || 200;
+      const maxCallsPerSecond = parseInt(document.getElementById('tenant-max-cps').value, 10) || 30;
+      const maxDurationSec = parseInt(document.getElementById('tenant-max-duration').value, 10) || 180;
+      const active = document.getElementById('tenant-active').checked;
+      const amdEnabled = document.getElementById('tenant-amd').checked;
+      const sttEnabled = document.getElementById('tenant-stt').checked;
+
+      const payload = {
+        id,
+        name,
+        dids,
+        instructions,
+        openaiPromptId,
+        voice,
+        openaiModel,
+        audioCodec,
+        maxConcurrentCalls,
+        maxCallsPerSecond,
+        maxDurationSec,
+        active,
+        amd: { enabled: amdEnabled, mode: 'active' },
+        stt: { enabled: sttEnabled }
+      };
+
+      const btn = document.getElementById('btn-save-tenant');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = 'Salvando...';
+
+      try {
+        const res = await fetch('/v1/tenants', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || 'Falha ao salvar tenant');
+        }
+
+        showToast(`✅ Prompt da IA e configurações de "${name}" salvos com sucesso! Hot-reload ativo.`, 'success');
+        closeModal('modal-tenant-editor');
+        await fetchTenantsData();
+      } catch (err) {
+        showToast(`Erro ao salvar: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+      }
+    }
+
+    async function deleteTenantPrompt(tenantId) {
+      if (tenantId === 'default') {
+        return alert('O tenant padrão não pode ser removido.');
+      }
+      if (!confirm(`Deseja realmente remover o tenant "${tenantId}"?`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(`/v1/tenants/${encodeURIComponent(tenantId)}`, {
+          method: 'DELETE'
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || 'Erro ao remover tenant');
+        }
+        showToast(`Tenant "${tenantId}" excluído com sucesso!`, 'info');
+        await fetchTenantsData();
+      } catch (err) {
+        showToast(`Erro ao excluir: ${err.message}`, 'error');
+      }
+    }
+
     async function fetchTenantsData() {
       try {
         const res = await fetch('/v1/tenants');
         if (!res.ok) return;
         const data = await res.json();
         const list = data.tenants || [];
+        cachedTenantsList = list;
+
+        const summaryEl = document.getElementById('lbl-tenants-summary');
+        if (summaryEl) {
+          summaryEl.textContent = `${list.length} persona(s) cadastrada(s)`;
+        }
 
         // Atualiza select do modal de originate
         const select = document.getElementById('orig-tenant');
-        select.innerHTML = list.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name || t.id)}</option>`).join('');
+        if (select) {
+          select.innerHTML = list.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name || t.id)}</option>`).join('');
+        }
 
         const tbody = document.getElementById('tenants-table-body');
         if (list.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">Nenhum tenant cadastrado.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 25px;">Nenhum tenant cadastrado.</td></tr>';
           return;
         }
 
         tbody.innerHTML = list.map(t => {
-          const dids = Array.isArray(t.dids) ? t.dids.join(', ') : '*';
+          const dids = Array.isArray(t.dids) ? t.dids.join(', ') : (t.dids || '*');
+          const promptText = t.instructions || '';
+          const snippet = promptText ? escapeHtml(promptText.slice(0, 95)) + (promptText.length > 95 ? '...' : '') : '<em style="color:var(--text-dim)">(Instruções padrão do sistema)</em>';
+          const promptIdBadge = t.openaiPromptId ? `<div style="font-size: 11px; color: var(--cyan); margin-top: 4px; font-family: monospace;">🔖 ID: ${escapeHtml(t.openaiPromptId)}</div>` : '';
+
           return `
             <tr>
-              <td><strong style="color: var(--primary);">${escapeHtml(t.id)}</strong></td>
-              <td>${escapeHtml(t.name || '-')}</td>
-              <td><code style="font-size: 11px;">${escapeHtml(dids)}</code></td>
-              <td><span class="badge-count ${t.activeCalls > 0 ? '' : 'zero'}">${t.activeCalls || 0}</span></td>
-              <td>${t.maxConcurrentCalls || 200} canais / ${t.maxCallsPerSecond || 30} cps</td>
               <td>
-                <span class="tag">${t.voice || 'alloy'}</span>
-                <span class="tag">${t.openaiModel || 'gpt-realtime-mini'}</span>
+                <strong style="color: var(--primary); font-family: monospace;">${escapeHtml(t.id)}</strong>
+                ${t.id === 'default' ? '<span class="tag" style="background: rgba(59, 130, 246, 0.2); color: #93c5fd; font-size: 10px; margin-left: 4px;">GLOBAL</span>' : ''}
+              </td>
+              <td><strong>${escapeHtml(t.name || '-')}</strong></td>
+              <td><code style="font-size: 11px;">${escapeHtml(dids)}</code></td>
+              <td>
+                <div style="font-size: 12px; line-height: 1.4; max-width: 320px; color: #cbd5e1;">${snippet}</div>
+                ${promptIdBadge}
               </td>
               <td>
-                ${t.amd?.enabled ? '<span class="tag">AMD</span>' : ''}
-                ${t.stt?.enabled ? '<span class="tag">STT</span>' : ''}
+                <span class="tag" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd;">🗣️ ${escapeHtml(t.voice || 'alloy')}</span>
+                <span class="tag" style="font-size: 10px;">${escapeHtml(t.openaiModel || 'gpt-realtime-mini')}</span>
+              </td>
+              <td style="font-size: 12px; color: var(--text-muted);">${t.maxConcurrentCalls || 200} canais / ${t.maxCallsPerSecond || 30} cps</td>
+              <td>
+                ${t.amd?.enabled ? '<span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">AMD</span>' : ''}
+                ${t.stt?.enabled ? '<span class="tag" style="background: rgba(6, 182, 212, 0.2); color: #67e8f9;">STT</span>' : ''}
+                ${!t.amd?.enabled && !t.stt?.enabled ? '<span style="font-size: 11px; color: var(--text-dim);">-</span>' : ''}
+              </td>
+              <td style="text-align: right; white-space: nowrap;">
+                <button class="btn btn-sm btn-primary" onclick="openTenantModal('${escapeHtml(t.id)}')">✏️ Editar Prompt</button>
+                ${t.id !== 'default' ? `<button class="btn btn-sm btn-danger" style="margin-left: 6px;" title="Remover Tenant" onclick="deleteTenantPrompt('${escapeHtml(t.id)}')">🗑️</button>` : ''}
               </td>
             </tr>
           `;
         }).join('');
-      } catch (err) {}
+      } catch (err) {
+        console.error('Erro ao carregar tenants:', err);
+      }
     }
 
     // -------------------------------------------------------------
