@@ -31,6 +31,11 @@ class TenantManager {
       maxCallsPerSecond: parseInt(process.env.MAX_CPS_PER_TENANT || '30', 10),
       bargeinLevel: parseInt(process.env.BARGEIN_LEVEL || '3', 10),
       bargeinGraceSec: parseInt(process.env.BARGEIN_GRACE_SEC || '8', 10),
+      crosstalkFilter: {
+        mode: process.env.CROSSTALK_FILTER_MODE || 'atual', // 'atual', 'wespeaker', 'ecapa', 'none'
+        ratio: parseFloat(process.env.CROSSTALK_RATIO || '0.45'),
+        threshold: parseFloat(process.env.SPEAKER_VERIFIER_THRESHOLD || '0.65')
+      },
       amd: {
         enabled: process.env.AMD_DEFAULT_ENABLED === 'true',
         mode: process.env.AMD_DEFAULT_MODE || 'active'
@@ -61,6 +66,10 @@ class TenantManager {
               this.tenants.set(item.id, {
                 ...defaultTenant,
                 ...item,
+                crosstalkFilter: {
+                  ...defaultTenant.crosstalkFilter,
+                  ...(item.crosstalkFilter || {})
+                },
                 amd: {
                   ...defaultTenant.amd,
                   ...(item.amd || {})
@@ -210,6 +219,11 @@ class TenantManager {
       ...defaultTenant,
       ...existing,
       ...data,
+      crosstalkFilter: {
+        ...defaultTenant.crosstalkFilter,
+        ...(existing.crosstalkFilter || {}),
+        ...(data.crosstalkFilter || {})
+      },
       amd: {
         ...defaultTenant.amd,
         ...(existing.amd || {}),

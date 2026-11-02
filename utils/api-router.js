@@ -60,9 +60,10 @@ const API_COMMANDS_CATALOG = [
     endpoints: [
       { method: 'GET', path: '/health', description: 'Healthcheck do Worker, Drachtio, FreeSWITCH Pool e Tenants' },
       { method: 'GET', path: '/v1/status', description: 'Status detalhado do cluster (FreeSWITCH + Whisper + Chamadas)' },
-      { method: 'GET', path: '/v1/features', description: 'Painel e status detalhado de todas as 10 features de voz ativas no Gateway' },
-      { method: 'POST', path: '/v1/features/test', description: 'Executa bateria de testes diagnósticos das 10 features de voz e retorna resultados e latência' },
+      { method: 'GET', path: '/v1/features', description: 'Painel e status detalhado de todas as 14 features de voz ativas no Gateway' },
+      { method: 'POST', path: '/v1/features/test', description: 'Executa bateria de testes diagnósticos das 14 features de voz e retorna resultados e latência' },
       { method: 'POST', path: '/v1/features/:id/test', description: 'Executa teste diagnóstico de uma feature específica' },
+      { method: 'POST', path: '/v1/features/crosstalk/mode', description: 'Alterna em tempo real o filtro de voz de fundo (atual/dsp, wespeaker, ecapa ou none)' },
       { method: 'GET', path: '/v1/cluster/nodes', description: 'Lista nós de mídia FreeSWITCH e nós de IA Whisper' },
       { method: 'GET', path: '/v1/commands', description: 'Catálogo interativo de todas as APIs e comandos de mercado' }
     ]
@@ -547,6 +548,58 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
         ok: result.passed,
         featureId,
         test: result
+      });
+      return true;
+    }
+
+    // Alternar o Modo do Filtro de Voz de Fundo / Biometria em Tempo Real (/v1/features/crosstalk/mode)
+    if ((req.method === 'POST' || req.method === 'PUT') && (cleanPath === '/v1/features/crosstalk/mode' || cleanPath === '/v1/features/crosstalk-mode')) {
+      const mode = String(body.mode || '').toLowerCase().trim();
+      const validModes = ['atual', 'dsp', 'wespeaker', 'ecapa', 'none'];
+      if (!validModes.includes(mode)) {
+        sendJson(res, 400, {
+          error: 'validation_error',
+          message: `Modo inválido '${mode}'. Modos aceitos: ${validModes.join(', ')}`
+        });
+        return true;
+      }
+
+      const tenantId = body.tenantId || 'default';
+      const targetTenant = tenantManager.tenants.get(tenantId) || tenantManager.getDefaultTenant();
+      const updatedTenant = tenantManager.upsertTenant({
+        ...targetTenant,
+        id: tenantId,
+        crosstalkFilter: {
+          ...(targetTenant.crosstalkFilter || {}),
+          mode,
+          ...(body.ratio !== undefined ? { ratio: Number(body.ratio) } : {}),
+          ...(body.threshold !== undefined ? { threshold: Number(body.threshold) } : {})
+        }
+      });
+
+      if (tenantId === 'default') {
+        process.env.CROSSTALK_FILTER_MODE = mode;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        tenantId,
+        mode,
+        crosstalkFilter: updatedTenant.crosstalkFilter,
+        message: `Filtro de voz de fundo alterado para '${mode}' (${tenantId}) com sucesso!`
+      });
+      return true;
+    }
+
+    if (req.method === 'GET' && (cleanPath === '/v1/features/crosstalk/mode' || cleanPath === '/v1/features/crosstalk-mode')) {
+      const tenantId = parsedUrl.searchParams.get('tenantId') || 'default';
+      const targetTenant = tenantManager.tenants.get(tenantId) || tenantManager.getDefaultTenant();
+      const mode = (targetTenant.crosstalkFilter && targetTenant.crosstalkFilter.mode) || process.env.CROSSTALK_FILTER_MODE || 'atual';
+      sendJson(res, 200, {
+        ok: true,
+        tenantId,
+        mode,
+        crosstalkFilter: targetTenant.crosstalkFilter || { mode }
       });
       return true;
     }

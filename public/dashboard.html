@@ -1254,10 +1254,41 @@
         </div>
       </div>
 
+      <!-- Card Interativo: Controle Liga/Desliga dos Filtros de Voz de Fundo -->
+      <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.95)); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 14px; padding: 18px 22px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+              <span style="font-size: 22px;">🛡️</span>
+              <h3 style="font-size: 16px; font-weight: 700; color: #fff; margin: 0;">Filtro de Vozes de Fundo & Biometria Vocal</h3>
+              <span id="active-crosstalk-badge" class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px; padding: 3px 8px;">ATIVO: Carregando...</span>
+            </div>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 0; max-width: 680px; line-height: 1.4;">
+              Proteja o atendimento contra interferência de pessoas falando ao fundo. Selecione o motor de filtragem desejado ou desligue sob demanda com <strong>Hot-Reload imediato</strong>:
+            </p>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+            <button class="btn btn-sm" id="btn-mode-atual" onclick="setGlobalCrosstalkMode('atual', this)" style="display: flex; align-items: center; gap: 6px;">
+              <span>🛡️ DSP Atual (YIN F0)</span>
+            </button>
+            <button class="btn btn-sm" id="btn-mode-wespeaker" onclick="setGlobalCrosstalkMode('wespeaker', this)" style="display: flex; align-items: center; gap: 6px;">
+              <span>🧬 WeSpeaker (CAM++)</span>
+            </button>
+            <button class="btn btn-sm" id="btn-mode-ecapa" onclick="setGlobalCrosstalkMode('ecapa', this)" style="display: flex; align-items: center; gap: 6px;">
+              <span>🧠 ECAPA-TDNN</span>
+            </button>
+            <button class="btn btn-sm" id="btn-mode-none" onclick="setGlobalCrosstalkMode('none', this)" style="display: flex; align-items: center; gap: 6px; border-color: rgba(239, 68, 68, 0.4); color: #f87171;">
+              <span>⚪ Desligado (Sem Filtro)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Filtros por Categoria -->
       <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;" id="vf-cat-filters">
-        <button class="btn btn-sm btn-primary" onclick="filterFeaturesCategory('all', this)">Todas as Features (11)</button>
+        <button class="btn btn-sm btn-primary" onclick="filterFeaturesCategory('all', this)">Todas as Features (14)</button>
         <button class="btn btn-sm" onclick="filterFeaturesCategory('DSP & Acústica', this)">DSP & Acústica</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('IA & Biometria Vocal', this)">IA & Biometria Vocal</button>
         <button class="btn btn-sm" onclick="filterFeaturesCategory('Mídia & Codecs', this)">Mídia & Codecs</button>
         <button class="btn btn-sm" onclick="filterFeaturesCategory('Interação em Tempo Real', this)">Interação em Tempo Real</button>
         <button class="btn btn-sm" onclick="filterFeaturesCategory('IA & Reconhecimento', this)">IA & Reconhecimento</button>
@@ -1581,6 +1612,29 @@
               <input type="checkbox" id="tenant-stt" style="width: auto;" checked>
               <span>STT Whisper & Gravação Estéreo</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Seção 5: Filtro de Voz de Fundo & Biometria Vocal -->
+        <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+          <h4 style="font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span>🛡️ Filtro de Vozes de Fundo & Biometria Vocal</span>
+          </h4>
+          <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 14px;">
+            <div class="form-group">
+              <label>Motor de Filtragem do Interlocutor</label>
+              <select id="tenant-crosstalk-mode">
+                <option value="atual">🛡️ Atual (DSP Acústico + YIN F0 - Padrão)</option>
+                <option value="wespeaker">🧬 WeSpeaker CAM++ (Rede Neural 512-dim - Máxima Precisão)</option>
+                <option value="ecapa">🧠 ECAPA-TDNN (Rede Neural SpeechBrain 512-dim)</option>
+                <option value="none">⚪ Desligado (Sem filtragem de voz secundária)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Threshold / Ratio</label>
+              <input type="number" step="0.05" id="tenant-crosstalk-threshold" placeholder="0.65" value="0.65">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">0.65 WeSpeaker | 0.60 ECAPA | 0.45 DSP</small>
+            </div>
           </div>
         </div>
       </div>
@@ -2456,6 +2510,11 @@
         activeCheck.checked = t.active !== false;
         amdCheck.checked = !!t.amd?.enabled;
         sttCheck.checked = t.stt?.enabled !== false;
+
+        const xtalkMode = t.crosstalkFilter?.mode || (t.crosstalkMode || 'atual');
+        const xtalkThresh = t.crosstalkFilter?.threshold ?? t.crosstalkFilter?.ratio ?? (xtalkMode === 'atual' ? 0.45 : 0.65);
+        document.getElementById('tenant-crosstalk-mode').value = xtalkMode;
+        document.getElementById('tenant-crosstalk-threshold').value = xtalkThresh;
       } else {
         titleEl.innerHTML = '<span>🧠 + Novo Tenant / Configurar Prompt da IA</span>';
         idInput.disabled = false;
@@ -2474,6 +2533,8 @@
         activeCheck.checked = true;
         amdCheck.checked = false;
         sttCheck.checked = true;
+        document.getElementById('tenant-crosstalk-mode').value = 'atual';
+        document.getElementById('tenant-crosstalk-threshold').value = 0.45;
       }
 
       updateCharCount();
@@ -2501,6 +2562,8 @@
       const active = document.getElementById('tenant-active').checked;
       const amdEnabled = document.getElementById('tenant-amd').checked;
       const sttEnabled = document.getElementById('tenant-stt').checked;
+      const crosstalkMode = document.getElementById('tenant-crosstalk-mode').value;
+      const crosstalkThreshold = parseFloat(document.getElementById('tenant-crosstalk-threshold').value) || (crosstalkMode === 'atual' ? 0.45 : 0.65);
 
       const payload = {
         id,
@@ -2516,7 +2579,12 @@
         maxDurationSec,
         active,
         amd: { enabled: amdEnabled, mode: 'active' },
-        stt: { enabled: sttEnabled }
+        stt: { enabled: sttEnabled },
+        crosstalkFilter: {
+          mode: crosstalkMode,
+          ratio: crosstalkThreshold,
+          threshold: crosstalkThreshold
+        }
       };
 
       const btn = document.getElementById('btn-save-tenant');
@@ -2621,7 +2689,10 @@
               <td>
                 ${t.amd?.enabled ? '<span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">AMD</span>' : ''}
                 ${t.stt?.enabled ? '<span class="tag" style="background: rgba(6, 182, 212, 0.2); color: #67e8f9;">STT</span>' : ''}
-                ${!t.amd?.enabled && !t.stt?.enabled ? '<span style="font-size: 11px; color: var(--text-dim);">-</span>' : ''}
+                ${(t.crosstalkFilter?.mode || t.crosstalkMode) === 'wespeaker' ? '<span class="tag" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd;">🧬 WeSpeaker</span>'
+                  : (t.crosstalkFilter?.mode || t.crosstalkMode) === 'ecapa' ? '<span class="tag" style="background: rgba(59, 130, 246, 0.2); color: #93c5fd;">🧠 ECAPA</span>'
+                  : (t.crosstalkFilter?.mode || t.crosstalkMode) === 'none' ? '<span class="tag" style="background: rgba(100, 116, 139, 0.2); color: #94a3b8;">Filtro Off</span>'
+                  : '<span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">🛡️ DSP</span>'}
               </td>
               <td style="text-align: right; white-space: nowrap;">
                 <button class="btn btn-sm btn-primary" onclick="openTenantModal('${escapeHtml(t.id)}')">✏️ Editar Prompt</button>
@@ -2701,6 +2772,16 @@
           summaryText.textContent = `${active} de ${total} features ativas | Codec: G.711 μ-law | Echo Cancellation: Sonar 425Hz | VAD Adaptativo: Ativo | Hard-Cap: 3min`;
         }
 
+        let activeXtalkMode = 'none';
+        if (features.find(f => f.id === 'wespeaker')?.active) {
+          activeXtalkMode = 'wespeaker';
+        } else if (features.find(f => f.id === 'ecapa')?.active) {
+          activeXtalkMode = 'ecapa';
+        } else if (features.find(f => f.id === 'crosstalk_filter')?.active) {
+          activeXtalkMode = 'atual';
+        }
+        updateCrosstalkControlButtons(activeXtalkMode);
+
         renderVoiceFeaturesChips(features);
         renderVoiceFeaturesFullTab(features);
       } catch (err) {
@@ -2773,6 +2854,16 @@
           }
         }
 
+        let activeXtalkMode = 'none';
+        if (features.find(f => f.id === 'wespeaker')?.active) {
+          activeXtalkMode = 'wespeaker';
+        } else if (features.find(f => f.id === 'ecapa')?.active) {
+          activeXtalkMode = 'ecapa';
+        } else if (features.find(f => f.id === 'crosstalk_filter')?.active) {
+          activeXtalkMode = 'atual';
+        }
+        updateCrosstalkControlButtons(activeXtalkMode);
+
         renderVoiceFeaturesChips(features);
         renderVoiceFeaturesFullTab(features);
       } catch (err) {
@@ -2814,6 +2905,84 @@
         btn.disabled = false;
         btn.innerHTML = oldHtml;
       }
+    }
+
+    async function setGlobalCrosstalkMode(mode, btnEl = null) {
+      const modeNames = {
+        atual: 'DSP Atual (YIN F0)',
+        dsp: 'DSP Atual (YIN F0)',
+        wespeaker: 'WeSpeaker CAM++ (Rede Neural 512-dim)',
+        ecapa: 'ECAPA-TDNN (Rede Neural 512-dim)',
+        none: 'Desligado (Sem Filtro)'
+      };
+
+      const originalHtml = btnEl ? btnEl.innerHTML : null;
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.innerHTML = 'Salvando...';
+      }
+
+      try {
+        const res = await apiFetch('/v1/features/crosstalk/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Falha ao alterar filtro');
+
+        showToast(`✅ Filtro de voz alterado para: ${modeNames[mode] || mode}! Hot-reload ativo.`, 'success');
+        updateCrosstalkControlButtons(mode);
+        await fetchVoiceFeatures(false);
+        if (typeof fetchTenantsData === 'function') {
+          fetchTenantsData();
+        }
+      } catch (err) {
+        showToast(`Erro ao alterar filtro: ${err.message}`, 'error');
+      } finally {
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.innerHTML = originalHtml;
+        }
+      }
+    }
+
+    function updateCrosstalkControlButtons(activeMode) {
+      const normalized = (activeMode === 'dsp' ? 'atual' : (activeMode || 'none')).toLowerCase();
+      
+      const badge = document.getElementById('active-crosstalk-badge');
+      if (badge) {
+        if (normalized === 'wespeaker') {
+          badge.textContent = 'ATIVO: WeSpeaker CAM++ (Neural 512-dim)';
+          badge.style.background = 'rgba(139, 92, 246, 0.25)';
+          badge.style.color = '#c4b5fd';
+        } else if (normalized === 'ecapa') {
+          badge.textContent = 'ATIVO: ECAPA-TDNN (Neural 512-dim)';
+          badge.style.background = 'rgba(59, 130, 246, 0.25)';
+          badge.style.color = '#93c5fd';
+        } else if (normalized === 'atual') {
+          badge.textContent = 'ATIVO: DSP Atual (YIN F0 + Gate)';
+          badge.style.background = 'rgba(16, 185, 129, 0.25)';
+          badge.style.color = '#34d399';
+        } else {
+          badge.textContent = 'DESLIGADO (Sem Filtro)';
+          badge.style.background = 'rgba(239, 68, 68, 0.2)';
+          badge.style.color = '#fca5a5';
+        }
+      }
+
+      const modes = ['atual', 'wespeaker', 'ecapa', 'none'];
+      modes.forEach(m => {
+        const btn = document.getElementById(`btn-mode-${m}`);
+        if (!btn) return;
+        if (m === normalized) {
+          btn.className = 'btn btn-sm btn-primary';
+          btn.style.boxShadow = '0 0 10px rgba(59, 130, 246, 0.5)';
+        } else {
+          btn.className = 'btn btn-sm';
+          btn.style.boxShadow = 'none';
+        }
+      });
     }
 
     function renderVoiceFeaturesChips(features) {
@@ -2894,7 +3063,20 @@
       ` : '';
 
       const actionsHtml = isFullTab ? `
-        <div class="vfc-card-actions">
+        <div class="vfc-card-actions" style="display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; flex-wrap: wrap;">
+          ${f.id === 'crosstalk_filter' ? (f.active
+            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" title="Filtro DSP ativo no Gateway">✓ Ativo</button>
+               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" title="Desligar este filtro">Desligar</button>`
+            : `<button class="btn btn-xs btn-primary" onclick="setGlobalCrosstalkMode('atual', this)">▶ Ligar DSP</button>`
+          ) : f.id === 'wespeaker' ? (f.active
+            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" title="WeSpeaker CAM++ ativo no Gateway">✓ Ativo</button>
+               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" title="Desligar este filtro">Desligar</button>`
+            : `<button class="btn btn-xs btn-primary" onclick="setGlobalCrosstalkMode('wespeaker', this)">▶ Ligar WeSpeaker</button>`
+          ) : f.id === 'ecapa' ? (f.active
+            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" title="ECAPA-TDNN ativo no Gateway">✓ Ativo</button>
+               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" title="Desligar este filtro">Desligar</button>`
+            : `<button class="btn btn-xs btn-primary" onclick="setGlobalCrosstalkMode('ecapa', this)">▶ Ligar ECAPA</button>`
+          ) : ''}
           <button class="btn btn-xs btn-outline" onclick="testSingleFeature('${f.id}', this)" title="Executa diagnóstico isolado desta feature">⚡ Testar Feature</button>
         </div>
       ` : '';

@@ -772,6 +772,23 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   assert.strictEqual(graceTestRes.body.ok, true);
   assert.strictEqual(graceTestRes.body.test.passed, true);
 
+  // 9.1.3 Alternância do Filtro de Voz de Fundo via API (/v1/features/crosstalk/mode)
+  const setWespeakerRes = await apiReq('POST', '/v1/features/crosstalk/mode', { mode: 'wespeaker' });
+  assert.strictEqual(setWespeakerRes.status, 200);
+  assert.strictEqual(setWespeakerRes.body.ok, true);
+  assert.strictEqual(setWespeakerRes.body.mode, 'wespeaker');
+
+  const checkWespeakerRes = await apiReq('GET', '/v1/features');
+  const wespeakerFeat = checkWespeakerRes.body.features.find(f => f.id === 'wespeaker');
+  const dspFeat = checkWespeakerRes.body.features.find(f => f.id === 'crosstalk_filter');
+  assert.strictEqual(wespeakerFeat.active, true);
+  assert.strictEqual(dspFeat.active, false);
+
+  // Retorna para o modo 'atual' (DSP)
+  const setAtualRes = await apiReq('POST', '/v1/features/crosstalk/mode', { mode: 'atual' });
+  assert.strictEqual(setAtualRes.status, 200);
+  assert.strictEqual(setAtualRes.body.mode, 'atual');
+
   const nodesRes = await apiReq('GET', '/v1/cluster/nodes');
   assert.strictEqual(nodesRes.status, 200);
   assert.ok(nodesRes.body.freeSwitch && nodesRes.body.whisper);
