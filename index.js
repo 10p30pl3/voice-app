@@ -1114,6 +1114,9 @@ class OpenAIS2SBridge {
         type: 'realtime',
         audio: {
           input: {
+            transcription: {
+              model: 'whisper-1'
+            },
             turn_detection: {
               type: 'server_vad',
               threshold: vadThreshold,
