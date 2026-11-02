@@ -253,6 +253,7 @@ class OpenAIS2SBridge {
       ratio: crosstalkRatio,
       hangoverMs: 400
     });
+    this.crosstalkEnrolledLogged = false;
 
     this.recorder = null;
     this.dtmfBuffer = '';
@@ -889,6 +890,13 @@ class OpenAIS2SBridge {
           !this.isToneProbe && !amdStillDeciding && !isGraceActive
             ? (this.crosstalkFilter ? this.crosstalkFilter.process(buffer) : true)
             : false;
+
+        if (this.crosstalkFilter && this.crosstalkFilter.enrolled && !this.crosstalkEnrolledLogged) {
+          this.crosstalkEnrolledLogged = true;
+          console.log(
+            `[${this.callId}] 👤 [BIOMETRIA VOCAL] Assinatura do titular capturada: F0 = ${Math.round(this.crosstalkFilter.ownerPitchHz)}Hz | Graves = ${this.crosstalkFilter.ownerLowRatio.toFixed(2)} | RMS = ${Math.round(this.crosstalkFilter.userVoiceRms)}. Vozes divergentes serão bloqueadas.`
+          );
+        }
 
         const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
 
