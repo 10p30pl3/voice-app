@@ -34,7 +34,8 @@ class TenantManager {
       crosstalkFilter: {
         mode: process.env.CROSSTALK_FILTER_MODE || 'atual', // 'atual', 'wespeaker', 'ecapa', 'none'
         ratio: parseFloat(process.env.CROSSTALK_RATIO || '0.45'),
-        threshold: parseFloat(process.env.SPEAKER_VERIFIER_THRESHOLD || '0.65')
+        // Limiar biométrico (wespeaker/ecapa). null = padrão calibrado do modelo (0.38 / 0.40)
+        threshold: process.env.SPEAKER_VERIFIER_THRESHOLD ? parseFloat(process.env.SPEAKER_VERIFIER_THRESHOLD) : null
       },
       amd: {
         enabled: process.env.AMD_DEFAULT_ENABLED === 'true',

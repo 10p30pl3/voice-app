@@ -278,12 +278,13 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
         active: crosstalkMode === 'wespeaker',
         badge: crosstalkMode === 'wespeaker' ? 'ATIVO (CAM++)' : 'DISPONÍVEL',
         mode: 'Embeddings 512-dim + Similaridade Cosseno',
-        detail: 'Deep learning speaker verification baseado em CAM++ (WeSpeaker). Extrai embeddings vocais de 512 dimensões nos primeiros 1.5s do usuário principal e bloqueia vozes secundárias com threshold configurável.',
+        detail: 'Deep learning speaker verification baseado em CAM++ (WeSpeaker). Cadastra o titular nos primeiros 1.5s de fala e verifica em janela deslizante (1.0–1.5s) durante a fala; bloqueia após 2 janelas divergentes (ou 1 muito divergente). EXPERIMENTAL: validado apenas com vozes sintéticas em canal G.711 simulado (EER ~5-16%).',
         parameters: {
           modelo: 'CAM++ (campplus.onnx)',
-          threshold: '0.65',
-          latenciaInferencia: '~9ms CPU',
-          autoEnrollment: '1.5s de fala inicial'
+          threshold: '0.38 (padrão calibrado)',
+          latenciaInferencia: '~10-30ms CPU (fora do event loop)',
+          autoEnrollment: '1.5s de fala inicial',
+          verificacao: 'Janela deslizante 1.0–1.5s a cada 0.4s'
         }
       },
       {
@@ -294,12 +295,13 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
         active: crosstalkMode === 'ecapa',
         badge: crosstalkMode === 'ecapa' ? 'ATIVO (ECAPA-TDNN)' : 'DISPONÍVEL',
         mode: 'Embeddings 512-dim ECAPA-TDNN',
-        detail: 'Arquitetura neural ECAPA-TDNN com squeeze-and-excitation e multi-layer feature aggregation para identificação e isolamento contínuo da voz do cliente.',
+        detail: 'Arquitetura neural ECAPA-TDNN com squeeze-and-excitation e multi-layer feature aggregation. EXPERIMENTAL: menos robusto a ruído que o WeSpeaker nos testes (EER ~5% limpo, ~25% com SNR 10 dB).',
         parameters: {
           modelo: 'ECAPA-TDNN 512 (ecapa512.onnx)',
-          threshold: '0.60',
-          latenciaInferencia: '~8ms CPU',
-          autoEnrollment: '1.5s de fala inicial'
+          threshold: '0.40 (padrão calibrado)',
+          latenciaInferencia: '~10-30ms CPU (fora do event loop)',
+          autoEnrollment: '1.5s de fala inicial',
+          verificacao: 'Janela deslizante 1.0–1.5s a cada 0.4s'
         }
       },
       {

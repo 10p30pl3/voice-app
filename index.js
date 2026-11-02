@@ -22,6 +22,7 @@ const WORKER_ID = parseInt(process.env.NODE_APP_INSTANCE || process.env.WORKER_I
 
 const EnergyManager = require('./utils/energy-manager');
 const CrosstalkFilter = require('./utils/crosstalk-filter');
+const FrameVad = require('./utils/frame-vad');
 const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
 const tenantManager = require('./utils/tenant-manager');
@@ -276,6 +277,10 @@ class OpenAIS2SBridge {
       ? new CrosstalkFilter({ ratio: crosstalkRatio, hangoverMs: 400 })
       : null;
     this.crosstalkEnrolledLogged = false;
+
+    // VAD de energia por frame: detector de "fala ativa" quando o gate DSP não está em uso
+    // (modos 'wespeaker', 'ecapa' e 'none'), evitando barge-in por frames de silêncio.
+    this.frameVad = this.crosstalkFilter ? null : new FrameVad();
 
     // Estado da Biometria Neural ('wespeaker' / 'ecapa')
     this.isSecondaryVoiceBlocked = false;
@@ -842,6 +847,11 @@ class OpenAIS2SBridge {
         }
       });
 
+      // Fim da rajada de fala: libera o bloqueio para que a próxima fala (do titular) não seja mutada
+      this.whisperSession.on('speaker_idle', () => {
+        this.isSecondaryVoiceBlocked = false;
+      });
+
       this.whisperSession.start();
     }
 
@@ -967,7 +977,9 @@ class OpenAIS2SBridge {
         const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
 
         // Barge-in Instantâneo (<20ms): só interrompe se for fala ativa legítima (não cauda/hangover silencioso)
-        const isActivelySpeaking = this.crosstalkFilter ? this.crosstalkFilter.isActivelySpeaking() : true;
+        const isActivelySpeaking = this.crosstalkFilter
+          ? this.crosstalkFilter.isActivelySpeaking()
+          : this.frameVad.process(buffer);
         if (isPrimaryVoice && isActivelySpeaking && this.isAgentTalking && this.canTriggerBargeIn()) {
           this.triggerBargeIn(this.isNeuralFilterActive ? `biometric_${this.crosstalkMode}` : 'local_biometric_vad');
         }

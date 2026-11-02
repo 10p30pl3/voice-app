@@ -38,6 +38,10 @@ services:
       - WHISPER_COMPUTE_TYPE=auto
       - WHISPER_MAX_BATCH_SIZE=8
       - WHISPER_BATCH_WINDOW_SEC=0.040
+      - MODELS_DIR=/app/models
+    volumes:
+      # Modelos ONNX de biometria vocal (WeSpeaker CAM++ / ECAPA-TDNN) - não versionados
+      - ./whisper-service/models:/app/models:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 10s

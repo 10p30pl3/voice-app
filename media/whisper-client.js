@@ -126,7 +126,7 @@ class WhisperSession extends EventEmitter {
     // Suporte aos filtros opcionais de biometria vocal neural: 'wespeaker' e 'ecapa'
     const spkMode = (sipSpkHeader || (tenant.crosstalkFilter && tenant.crosstalkFilter.mode) || tenant.crosstalkMode || process.env.CROSSTALK_FILTER_MODE || 'none').toLowerCase();
     this.spkFilter = (spkMode === 'wespeaker' || spkMode === 'ecapa') ? spkMode : 'none';
-    this.spkThreshold = Number((tenant.crosstalkFilter && tenant.crosstalkFilter.threshold) || tenant.crosstalkThreshold || process.env.CROSSTALK_THRESHOLD || 0.55);
+    this.spkThreshold = Number((tenant.crosstalkFilter && tenant.crosstalkFilter.threshold) || tenant.crosstalkThreshold || process.env.CROSSTALK_THRESHOLD || 0);
     this.isSpkFilterEnabled = this.spkFilter !== 'none';
 
     this.amdMode = (tenant.amd && tenant.amd.mode) || 'active';
@@ -209,7 +209,8 @@ class WhisperSession extends EventEmitter {
     urlObj.searchParams.set('stt', this.isSttEnabled ? 'true' : 'false');
     urlObj.searchParams.set('mode', this.amdMode);
     urlObj.searchParams.set('spk_filter', this.spkFilter || 'none');
-    urlObj.searchParams.set('spk_threshold', String(this.spkThreshold || 0.55));
+    // Sem threshold explícito, o serviço usa o padrão calibrado do modelo
+    if (this.spkThreshold > 0) urlObj.searchParams.set('spk_threshold', String(this.spkThreshold));
 
     if (this.isAmdEnabled) {
       this.circuitBreakerTimer = setTimeout(() => {
@@ -271,6 +272,10 @@ class WhisperSession extends EventEmitter {
 
           if (msg.type === 'speaker_verification') {
             this.emit('speaker_verification', msg);
+          }
+
+          if (msg.type === 'speaker_idle') {
+            this.emit('speaker_idle', msg);
           }
         } catch (err) {
           console.error(`[${this.callId}] [WhisperSession] Erro ao decodificar JSON do Whisper:`, err.message);

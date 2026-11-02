@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from priority_worker import PriorityInferenceWorker
 from classifier import AMDClassifier
 from pii_redactor import redact_pii
-from speaker_verifier import speaker_verifier, MODEL_PATHS
+from speaker_verifier import speaker_verifier, SpeakerStream, DEFAULT_THRESHOLDS, model_key_of
 
 worker = PriorityInferenceWorker()
 classifier = AMDClassifier()
@@ -38,10 +38,7 @@ async def health_check():
         "device": worker.device,
         "num_workers": worker.num_workers,
         "queue_size": len(worker.queue),
-        "speaker_models": {
-            "wespeaker": os.path.exists(MODEL_PATHS["wespeaker"]),
-            "ecapa": os.path.exists(MODEL_PATHS["ecapa"])
-        },
+        "speaker_models": speaker_verifier.models_available(),
         "stats": stats
     }
 
@@ -70,7 +67,7 @@ async def verify_speakers_api(
     file1: UploadFile = File(...),
     file2: UploadFile = File(...),
     model: str = Query("wespeaker"),
-    threshold: float = Query(0.55)
+    threshold: float = Query(None)
 ):
     """
     Compara dois áudios usando WeSpeaker (CAM++) ou ECAPA-TDNN para verificar se pertencem ao mesmo locutor
@@ -85,8 +82,11 @@ async def verify_speakers_api(
     a1 = np.frombuffer(c1, dtype=np.int16).astype(np.float32) / 32768.0
     a2 = np.frombuffer(c2, dtype=np.int16).astype(np.float32) / 32768.0
 
-    emb1 = speaker_verifier.extract_embedding(a1, model_name=model)
-    emb2 = speaker_verifier.extract_embedding(a2, model_name=model)
+    if threshold is None:
+        threshold = DEFAULT_THRESHOLDS[model_key_of(model)]
+
+    emb1 = await asyncio.to_thread(speaker_verifier.extract_embedding, a1, model)
+    emb2 = await asyncio.to_thread(speaker_verifier.extract_embedding, a2, model)
     sim = speaker_verifier.cosine_similarity(emb1, emb2)
 
     stats["speaker_verifications"] += 1
@@ -106,7 +106,7 @@ async def audio_stream_endpoint(
     stt: bool = Query(False),
     mode: str = Query("active"),
     spk_filter: str = Query("none"), # "none", "wespeaker", "ecapa"
-    spk_threshold: float = Query(0.55)
+    spk_threshold: float = Query(None)
 ):
     await websocket.accept()
     stats["total_connections"] += 1
@@ -121,6 +121,11 @@ async def audio_stream_endpoint(
     amd_decided = not amd
     speaker_enrolled = False
     is_spk_active = spk_filter.lower() in ["wespeaker", "ecapa"]
+    if spk_threshold is None:
+        spk_threshold = DEFAULT_THRESHOLDS[model_key_of(spk_filter)]
+
+    # Verificação de locutor em janela deslizante (durante a fala)
+    spk_stream = SpeakerStream(call_id, spk_filter, spk_threshold) if is_spk_active else None
 
     BASE_VAD_THRESHOLD = 0.015
     noise_floor = 0.008
@@ -140,8 +145,10 @@ async def audio_stream_endpoint(
 
                 pcm16 = np.frombuffer(chunk, dtype=np.int16)
                 f32 = pcm16.astype(np.float32) / 32768.0
-                audio_buffer.append(f32)
-                total_samples += len(f32)
+                needs_buffer = stt or (amd and not amd_decided)
+                if needs_buffer:
+                    audio_buffer.append(f32)
+                    total_samples += len(f32)
 
                 rms = float(np.sqrt(np.mean(f32 ** 2)))
                 dynamic_threshold = max(BASE_VAD_THRESHOLD, min(0.06, noise_floor * 2.2))
@@ -152,13 +159,26 @@ async def audio_stream_endpoint(
                 else:
                     silence_samples += len(f32)
                     noise_floor = 0.92 * noise_floor + 0.08 * rms
-                    if speech_samples == 0 and len(audio_buffer) > 10:
+                    if needs_buffer and speech_samples == 0 and len(audio_buffer) > 10:
                         dropped = audio_buffer.pop(0)
                         total_samples = max(0, total_samples - len(dropped))
 
                 speech_ms = int((speech_samples / 16000.0) * 1000)
                 silence_ms = int((silence_samples / 16000.0) * 1000)
                 elapsed_ms = int((time.time() - start_time) * 1000)
+
+                # --- 0. BIOMETRIA VOCAL EM JANELA DESLIZANTE (cadastro + verificação durante a fala) ---
+                if spk_stream is not None:
+                    work = spk_stream.feed(f32, rms > dynamic_threshold)
+                    if work:
+                        evt = await asyncio.to_thread(spk_stream.run, work) if work != "idle" else spk_stream.run(work)
+                        if evt:
+                            if evt["type"] == "speaker_verification":
+                                stats["speaker_verifications"] += 1
+                            try:
+                                await websocket.send_text(json.dumps(evt))
+                            except Exception:
+                                break
 
                 # --- 1. LÓGICA DE DECISÃO DO AMD (Fila P0) ---
                 if amd and not amd_decided:
@@ -212,21 +232,6 @@ async def audio_stream_endpoint(
                                 "probas": clf_result.get("probas", {})
                             }
 
-                            # Auto-Enrollment Biométrico imediato no 1º turno de fala humana
-                            if is_spk_active and not speaker_enrolled and len(full_audio) >= 4800:
-                                enroll_res = speaker_verifier.enroll(call_id, full_audio, model_name=spk_filter)
-                                if enroll_res.get("success"):
-                                    speaker_enrolled = True
-                                    try:
-                                        await websocket.send_text(json.dumps({
-                                            "type": "speaker_enrolled",
-                                            "call_id": call_id,
-                                            "model": spk_filter,
-                                            "duration_s": enroll_res.get("duration_s", 0)
-                                        }))
-                                    except Exception:
-                                        pass
-
                         audio_buffer = []
                         speech_samples = 0
                         silence_samples = 0
@@ -240,8 +245,8 @@ async def audio_stream_endpoint(
                         if not stt and not is_spk_active:
                             break
 
-                # --- 2. LÓGICA DE BIOMETRIA VOCAL CONTÍNUA & STT (Fila P1) ---
-                elif (stt or is_spk_active) and amd_decided:
+                # --- 2. LÓGICA DE TRANSCRIÇÃO CONTÍNUA (STT) (Fila P1) ---
+                elif stt and amd_decided:
                     if (speech_ms >= 400 and silence_ms >= 400) or total_samples >= (16000 * 3):
                         if audio_buffer and speech_ms >= 200:
                             phrase_audio = np.concatenate(audio_buffer)
@@ -250,38 +255,6 @@ async def audio_stream_endpoint(
                             speech_samples = 0
                             silence_samples = 0
                             total_samples = 0
-
-                            # Auto-Enrollment (caso o AMD tenha vindo desabilitado ou não tenha cadastrado antes)
-                            if is_spk_active and not speaker_enrolled and len(phrase_audio) >= 4800:
-                                enroll_res = speaker_verifier.enroll(call_id, phrase_audio, model_name=spk_filter)
-                                if enroll_res.get("success"):
-                                    speaker_enrolled = True
-                                    try:
-                                        await websocket.send_text(json.dumps({
-                                            "type": "speaker_enrolled",
-                                            "call_id": call_id,
-                                            "model": spk_filter,
-                                            "duration_s": enroll_res.get("duration_s", 0)
-                                        }))
-                                    except Exception:
-                                        pass
-                            # Verificação Biométrica Contínua
-                            elif is_spk_active and speaker_enrolled and len(phrase_audio) >= 3200:
-                                ver_res = speaker_verifier.verify(
-                                    call_id, phrase_audio, model_name=spk_filter, threshold=spk_threshold
-                                )
-                                stats["speaker_verifications"] += 1
-                                try:
-                                    await websocket.send_text(json.dumps({
-                                        "type": "speaker_verification",
-                                        "call_id": call_id,
-                                        "model": spk_filter,
-                                        "is_match": ver_res["is_match"],
-                                        "similarity": ver_res["similarity"],
-                                        "threshold": spk_threshold
-                                    }))
-                                except Exception:
-                                    break
 
                             # STT via Whisper
                             if stt:

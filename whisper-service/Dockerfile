@@ -20,6 +20,10 @@ RUN python -c "from faster_whisper import WhisperModel; WhisperModel('small', de
 
 COPY . .
 
+# Modelos ONNX de biometria vocal (campplus.onnx, ecapa512.onnx) são montados em /app/models (ver docker-compose.yml)
+# Baixe-os com: ./scripts/download_models.sh
+ENV MODELS_DIR=/app/models
+
 EXPOSE 8080
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

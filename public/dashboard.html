@@ -1264,7 +1264,7 @@
               <span id="active-crosstalk-badge" class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px; padding: 3px 8px;">ATIVO: Carregando...</span>
             </div>
             <p style="font-size: 12px; color: var(--text-muted); margin: 0; max-width: 680px; line-height: 1.4;">
-              Proteja o atendimento contra interferência de pessoas falando ao fundo. Selecione o motor de filtragem desejado ou desligue sob demanda com <strong>Hot-Reload imediato</strong>:
+              Proteja o atendimento contra interferência de pessoas falando ao fundo. Selecione o motor de filtragem desejado ou desligue sob demanda (vale para as <strong>próximas chamadas</strong>; chamadas em andamento mantêm o modo atual). <em>WeSpeaker/ECAPA são experimentais.</em>
             </p>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
@@ -1620,7 +1620,7 @@
           <h4 style="font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
             <span>🛡️ Filtro de Vozes de Fundo & Biometria Vocal</span>
           </h4>
-          <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 14px;">
+          <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px;">
             <div class="form-group">
               <label>Motor de Filtragem do Interlocutor</label>
               <select id="tenant-crosstalk-mode">
@@ -1631,9 +1631,14 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Threshold / Ratio</label>
-              <input type="number" step="0.05" id="tenant-crosstalk-threshold" placeholder="0.65" value="0.65">
-              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">0.65 WeSpeaker | 0.60 ECAPA | 0.45 DSP</small>
+              <label>Limiar biométrico (WeSpeaker / ECAPA)</label>
+              <input type="number" step="0.01" min="0" max="1" id="tenant-crosstalk-threshold" placeholder="padrão do modelo">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Vazio = padrão calibrado (0.38 WeSpeaker | 0.40 ECAPA). Valores &gt;0.5 bloqueiam o próprio titular em telefonia.</small>
+            </div>
+            <div class="form-group">
+              <label>Ratio do filtro DSP</label>
+              <input type="number" step="0.05" min="0.1" max="1" id="tenant-crosstalk-ratio" placeholder="0.45" value="0.45">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Somente modo "Atual (DSP)". Padrão 0.45.</small>
             </div>
           </div>
         </div>
@@ -2512,9 +2517,9 @@
         sttCheck.checked = t.stt?.enabled !== false;
 
         const xtalkMode = t.crosstalkFilter?.mode || (t.crosstalkMode || 'atual');
-        const xtalkThresh = t.crosstalkFilter?.threshold ?? t.crosstalkFilter?.ratio ?? (xtalkMode === 'atual' ? 0.45 : 0.65);
         document.getElementById('tenant-crosstalk-mode').value = xtalkMode;
-        document.getElementById('tenant-crosstalk-threshold').value = xtalkThresh;
+        document.getElementById('tenant-crosstalk-threshold').value = t.crosstalkFilter?.threshold ?? '';
+        document.getElementById('tenant-crosstalk-ratio').value = t.crosstalkFilter?.ratio ?? 0.45;
       } else {
         titleEl.innerHTML = '<span>🧠 + Novo Tenant / Configurar Prompt da IA</span>';
         idInput.disabled = false;
@@ -2534,7 +2539,8 @@
         amdCheck.checked = false;
         sttCheck.checked = true;
         document.getElementById('tenant-crosstalk-mode').value = 'atual';
-        document.getElementById('tenant-crosstalk-threshold').value = 0.45;
+        document.getElementById('tenant-crosstalk-threshold').value = '';
+        document.getElementById('tenant-crosstalk-ratio').value = 0.45;
       }
 
       updateCharCount();
@@ -2563,7 +2569,9 @@
       const amdEnabled = document.getElementById('tenant-amd').checked;
       const sttEnabled = document.getElementById('tenant-stt').checked;
       const crosstalkMode = document.getElementById('tenant-crosstalk-mode').value;
-      const crosstalkThreshold = parseFloat(document.getElementById('tenant-crosstalk-threshold').value) || (crosstalkMode === 'atual' ? 0.45 : 0.65);
+      const rawThreshold = document.getElementById('tenant-crosstalk-threshold').value.trim();
+      const crosstalkThreshold = rawThreshold === '' ? null : parseFloat(rawThreshold);
+      const crosstalkRatio = parseFloat(document.getElementById('tenant-crosstalk-ratio').value) || 0.45;
 
       const payload = {
         id,
@@ -2582,7 +2590,7 @@
         stt: { enabled: sttEnabled },
         crosstalkFilter: {
           mode: crosstalkMode,
-          ratio: crosstalkThreshold,
+          ratio: crosstalkRatio,
           threshold: crosstalkThreshold
         }
       };
@@ -2931,7 +2939,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || 'Falha ao alterar filtro');
 
-        showToast(`✅ Filtro de voz alterado para: ${modeNames[mode] || mode}! Hot-reload ativo.`, 'success');
+        showToast(`✅ Filtro de voz alterado para: ${modeNames[mode] || mode}! Vale para as próximas chamadas (chamadas em andamento mantêm o modo anterior).`, 'success');
         updateCrosstalkControlButtons(mode);
         await fetchVoiceFeatures(false);
         if (typeof fetchTenantsData === 'function') {
