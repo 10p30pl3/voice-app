@@ -230,6 +230,7 @@ class OpenAIS2SBridge {
     this.isOnHold = false;
     this.transcriptLog = [];
     this.lastTurn = null;
+    this.activeAudioFormat = this.useG711 ? 'g711_ulaw' : 'pcm24k';
 
     this.handleEslEvent = this.handleEslEvent.bind(this);
     this.handleDtmf = this.handleDtmf.bind(this);
@@ -317,6 +318,17 @@ class OpenAIS2SBridge {
         }
       }
 
+      if (body.type === 'session.updated' && body.session) {
+        const outFmt = body.session.audio?.output?.format?.type;
+        if (outFmt === 'audio/pcmu') {
+          this.activeAudioFormat = 'g711_ulaw';
+          console.log(`[${this.callId}] 🟢 Formato de áudio confirmado pela OpenAI: G.711 u-law`);
+        } else {
+          this.activeAudioFormat = 'pcm24k';
+          console.log(`[${this.callId}] ℹ️ Formato de áudio da OpenAI: ${outFmt || 'pcm24k'}`);
+        }
+      }
+
       if (body.type === 'response.created' || body.type === 'response.output_item.added') {
         if (!this.isAgentTalking) {
           this.isAgentTalking = true;
@@ -333,7 +345,9 @@ class OpenAIS2SBridge {
           this.mediaBridge.startPlaybackStream();
         }
         const rawDelta = Buffer.from(body.delta, 'base64');
-        const pcm8k = this.useG711 ? mulawToLinear16(rawDelta) : downsample24to8(rawDelta);
+        const pcm8k = this.activeAudioFormat === 'g711_ulaw'
+          ? mulawToLinear16(rawDelta)
+          : downsample24to8(rawDelta);
         this.mediaBridge.pushAudioChunk(pcm8k);
       }
 
@@ -723,9 +737,6 @@ class OpenAIS2SBridge {
       type: 'session.update',
       session: {
         type: 'realtime',
-        input_audio_transcription: {
-          model: 'whisper-1'
-        },
         audio: {
           input: {
             turn_detection: {
