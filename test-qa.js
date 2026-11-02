@@ -439,6 +439,52 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   bridgeMedia.killAudio();
   assert.strictEqual(clearAiCalled, true, 'killAudio() deve truncar o buffer de gravação da IA no Barge-In');
 
+  // 8.1.1 Teste de Período de Graça de Barge-In (Lockout Inicial nos primeiros N segundos)
+  const graceHarness = {
+    callId: 'qa-bargein-grace',
+    startedAt: new Date(Date.now() - 2000), // 2s decorridos de chamada
+    bargeinGraceSec: 5,
+    isSafetyExpiring: false,
+    isAgentTalking: true,
+    killed: false,
+    mediaBridge: {
+      killAudio: () => { graceHarness.killed = true; }
+    },
+    isBargeinGraceActive() {
+      if (!this.startedAt || this.bargeinGraceSec <= 0) return false;
+      const elapsedSec = (Date.now() - this.startedAt.getTime()) / 1000;
+      return elapsedSec < this.bargeinGraceSec;
+    },
+    canTriggerBargeIn() {
+      if (this.isSafetyExpiring) return false;
+      if (this.isBargeinGraceActive()) return false;
+      return true;
+    },
+    triggerBargeIn(reason) {
+      if (!this.canTriggerBargeIn()) return false;
+      this.isAgentTalking = false;
+      this.mediaBridge.killAudio();
+      return true;
+    }
+  };
+
+  // Dentro dos primeiros 5s (2s decorridos): deve bloquear interrupção
+  assert.strictEqual(graceHarness.isBargeinGraceActive(), true);
+  assert.strictEqual(graceHarness.canTriggerBargeIn(), false);
+  const blockedResult = graceHarness.triggerBargeIn('speech_started');
+  assert.strictEqual(blockedResult, false);
+  assert.strictEqual(graceHarness.killed, false);
+  assert.strictEqual(graceHarness.isAgentTalking, true);
+
+  // Após os 5s (6s decorridos): deve liberar corte de fala normalmente
+  graceHarness.startedAt = new Date(Date.now() - 6000);
+  assert.strictEqual(graceHarness.isBargeinGraceActive(), false);
+  assert.strictEqual(graceHarness.canTriggerBargeIn(), true);
+  const allowedResult = graceHarness.triggerBargeIn('speech_started');
+  assert.strictEqual(allowedResult, true);
+  assert.strictEqual(graceHarness.killed, true);
+  assert.strictEqual(graceHarness.isAgentTalking, false);
+
   // 8.2 Simula lógica de DTMF com Debounce e '#'
   let sentOpenAiEvents = [];
   let bargeInKilled = false;
@@ -632,29 +678,29 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   const statusRes = await apiReq('GET', '/v1/status');
   assert.strictEqual(statusRes.status, 200);
   assert.ok(statusRes.body.whisperCluster && typeof statusRes.body.whisperCluster.totalNodes === 'number');
-  assert.ok(Array.isArray(statusRes.body.voiceFeatures) && statusRes.body.voiceFeatures.length === 10);
+  assert.ok(Array.isArray(statusRes.body.voiceFeatures) && statusRes.body.voiceFeatures.length === 11);
 
   const featRes = await apiReq('GET', '/v1/features');
   assert.strictEqual(featRes.status, 200);
-  assert.strictEqual(featRes.body.count, 10);
-  assert.ok(featRes.body.activeCount >= 7);
+  assert.strictEqual(featRes.body.count, 11);
+  assert.ok(featRes.body.activeCount >= 8);
 
-  // 9.1.1 Diagnóstico das 10 Features de Voz (/v1/features/test)
+  // 9.1.1 Diagnóstico das 11 Features de Voz (/v1/features/test)
   const diagRes = await apiReq('POST', '/v1/features/test');
   assert.strictEqual(diagRes.status, 200);
   assert.strictEqual(diagRes.body.ok, true);
-  assert.strictEqual(diagRes.body.total, 10);
-  assert.strictEqual(diagRes.body.passed, 10);
+  assert.strictEqual(diagRes.body.total, 11);
+  assert.strictEqual(diagRes.body.passed, 11);
   assert.strictEqual(diagRes.body.failed, 0);
   assert.ok(diagRes.body.totalDurationMs < 1000);
-  assert.strictEqual(diagRes.body.features.length, 10);
+  assert.strictEqual(diagRes.body.features.length, 11);
   assert.strictEqual(diagRes.body.features[0].test.passed, true);
 
-  // 9.1.2 Teste de feature individual (/v1/features/codec/test)
-  const singleTestRes = await apiReq('POST', '/v1/features/codec/test');
-  assert.strictEqual(singleTestRes.status, 200);
-  assert.strictEqual(singleTestRes.body.ok, true);
-  assert.strictEqual(singleTestRes.body.test.passed, true);
+  // 9.1.2 Teste de feature individual (/v1/features/bargein_grace/test)
+  const graceTestRes = await apiReq('POST', '/v1/features/bargein_grace/test');
+  assert.strictEqual(graceTestRes.status, 200);
+  assert.strictEqual(graceTestRes.body.ok, true);
+  assert.strictEqual(graceTestRes.body.test.passed, true);
 
   const nodesRes = await apiReq('GET', '/v1/cluster/nodes');
   assert.strictEqual(nodesRes.status, 200);

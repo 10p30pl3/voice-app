@@ -30,6 +30,7 @@ class TenantManager {
       maxConcurrentCalls: parseInt(process.env.MAX_CONCURRENT_CALLS_PER_TENANT || '200', 10),
       maxCallsPerSecond: parseInt(process.env.MAX_CPS_PER_TENANT || '30', 10),
       bargeinLevel: parseInt(process.env.BARGEIN_LEVEL || '3', 10),
+      bargeinGraceSec: parseInt(process.env.BARGEIN_GRACE_SEC || '5', 10),
       amd: {
         enabled: process.env.AMD_DEFAULT_ENABLED === 'true',
         mode: process.env.AMD_DEFAULT_MODE || 'active'

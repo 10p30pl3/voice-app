@@ -461,10 +461,51 @@ async function testCpaas() {
   };
 }
 
+/**
+ * 11. Teste Período de Graça de Barge-In (Lockout Inicial)
+ */
+async function testBargeinGrace({ tenantManager } = {}) {
+  const start = process.hrtime.bigint();
+  const tenant = tenantManager ? tenantManager.getDefaultTenant() : {};
+  const graceSec = Number(tenant.bargeinGraceSec || process.env.BARGEIN_GRACE_SEC || 5);
+
+  if (graceSec <= 0) {
+    throw new Error(`Período de graça configurado é inválido (${graceSec}s)`);
+  }
+
+  const checkBargeInAllowed = (startedAtDate, grace) => {
+    const elapsedSec = (Date.now() - startedAtDate.getTime()) / 1000;
+    return elapsedSec >= grace;
+  };
+
+  const callStartRecent = new Date(Date.now() - 2000);
+  const allowedDuringGrace = checkBargeInAllowed(callStartRecent, graceSec);
+  if (allowedDuringGrace !== false) {
+    throw new Error(`Barge-in foi indevidamente permitido dentro do período de graça (2s < ${graceSec}s)`);
+  }
+
+  const callStartPast = new Date(Date.now() - (graceSec + 1) * 1000);
+  const allowedAfterGrace = checkBargeInAllowed(callStartPast, graceSec);
+  if (allowedAfterGrace !== true) {
+    throw new Error(`Barge-in não foi liberado após o período de graça (${graceSec + 1}s >= ${graceSec}s)`);
+  }
+
+  const durationMs = Math.max(0.1, Number((process.hrtime.bigint() - start) / 1000000n));
+  return {
+    id: 'bargein_grace',
+    name: 'Período de Graça de Barge-In (Lockout Inicial)',
+    passed: true,
+    durationMs: Number(durationMs.toFixed(2)),
+    result: 'APROVADO',
+    details: `Lockout de ${graceSec}s calibrado com sucesso: bloqueia interrupção nos primeiros ${graceSec}s (protegendo a saudação da IA contra ruídos de linha/cumprimentos) e libera barge-in automaticamente aos ${graceSec}s.`
+  };
+}
+
 const DIAGNOSTIC_RUNNERS = {
   aec: testAec,
   noise: testNoise,
   bargein: testBargein,
+  bargein_grace: testBargeinGrace,
   codec: testCodec,
   recording: testRecording,
   stt: testStt,

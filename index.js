@@ -224,6 +224,13 @@ class OpenAIS2SBridge {
     this.maxDurationSec = 180;
     this.isTerminated = false;
 
+    const sipBargeinGrace = this.sipHeaders['x-bargein-grace-sec'] || this.sipHeaders['X-Bargein-Grace-Sec'];
+    this.bargeinGraceSec = Number(
+      sipBargeinGrace !== undefined
+        ? sipBargeinGrace
+        : this.tenant.bargeinGraceSec ?? process.env.BARGEIN_GRACE_SEC ?? 5
+    );
+
     this.recorder = null;
     this.dtmfBuffer = '';
     this.dtmfTimer = null;
@@ -243,6 +250,42 @@ class OpenAIS2SBridge {
 
   setCleanupHandler(handler) {
     this.cleanupHandler = handler;
+  }
+
+  isBargeinGraceActive() {
+    if (!this.startedAt || this.bargeinGraceSec <= 0) return false;
+    const elapsedSec = (Date.now() - this.startedAt.getTime()) / 1000;
+    return elapsedSec < this.bargeinGraceSec;
+  }
+
+  canTriggerBargeIn() {
+    if (this.isSafetyExpiring) return false;
+    if (this.isBargeinGraceActive()) return false;
+    return true;
+  }
+
+  triggerBargeIn(reason = 'speech_started') {
+    if (!this.canTriggerBargeIn()) {
+      const elapsedSec = this.startedAt ? (Date.now() - this.startedAt.getTime()) / 1000 : 0;
+      console.log(
+        `[${this.callId}] 🛡️ [BARGE-IN GRACE] Tentativa de Barge-In (${reason}) bloqueada: ${elapsedSec.toFixed(1)}s < ${this.bargeinGraceSec}s (Proteção de Saudação Inicial).`
+      );
+      return false;
+    }
+
+    console.log(`[${this.callId}] 🎤 BARGE-IN: Interrompendo agente imediatamente (${reason})...`);
+    this.isAgentTalking = false;
+    this.mediaBridge.killAudio();
+    if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+      try {
+        this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
+      } catch {}
+    }
+    if (this.endpoint && this.channelUuid) {
+      this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
+      this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
+    }
+    return true;
   }
 
   handleEslEvent(evt) {
@@ -405,20 +448,7 @@ class OpenAIS2SBridge {
       }
 
       if (body.type === 'input_audio_buffer.speech_started') {
-        if (this.isSafetyExpiring) {
-          return;
-        }
-        console.log(`[${this.callId}] 🎤 BARGE-IN: Usuário falou! Interrompendo agente imediatamente...`);
-        this.isAgentTalking = false;
-        // Purga instantaneamente qualquer áudio acumulado no buffer de playout do mod_audio_fork
-        this.mediaBridge.killAudio();
-        if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
-          this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
-        }
-        if (this.endpoint && this.channelUuid) {
-          this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
-          this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
-        }
+        this.triggerBargeIn('speech_started');
       }
     } catch (err) {
       console.error(`[${this.callId}] Erro ao decodificar mensagem OpenAI:`, err.message);
@@ -432,16 +462,16 @@ class OpenAIS2SBridge {
 
     console.log(`[${this.callId}] 🔢 [DTMF] Dígito capturado: '${digit}'`);
 
-    // Barge-in imediato no primeiro dígito caso a IA esteja falando
+    // Barge-in no primeiro dígito caso a IA esteja falando
     if (this.isAgentTalking) {
-      this.isAgentTalking = false;
-      this.mediaBridge.killAudio();
-      if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
-        this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
-      }
-      if (this.endpoint && this.channelUuid) {
-        this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
-        this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
+      if (typeof this.triggerBargeIn === 'function') {
+        this.triggerBargeIn('dtmf_input');
+      } else {
+        this.isAgentTalking = false;
+        if (this.mediaBridge) this.mediaBridge.killAudio();
+        if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+          this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
+        }
       }
     }
 
@@ -895,6 +925,8 @@ class OpenAIS2SBridge {
       durationSec,
       maxDurationSec: this.maxDurationSec || 180,
       isSafetyExpiring: this.isSafetyExpiring,
+      bargeinGraceSec: this.bargeinGraceSec,
+      isBargeinGraceActive: this.isBargeinGraceActive(),
       codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
       deviceMode: this.deviceMode,
       noiseProfile: this.currentProfile,
@@ -1275,6 +1307,8 @@ async function originateOutboundCall(params) {
         params.stt !== undefined ? String(Boolean(params.stt)) : customHeaders['X-STT-Enabled'],
       'x-dtmf-enabled':
         params.dtmf !== undefined ? String(Boolean(params.dtmf)) : customHeaders['X-DTMF-Enabled'],
+      'x-bargein-grace-sec':
+        params.bargeinGraceSec !== undefined ? String(params.bargeinGraceSec) : customHeaders['X-Bargein-Grace-Sec'],
       'x-tenant-id': tenant.id
     };
 
@@ -1395,6 +1429,7 @@ srf.invite(async (req, res) => {
       'x-amd-enabled': req.get('x-amd-enabled') || req.get('X-AMD-Enabled'),
       'x-stt-enabled': req.get('x-stt-enabled') || req.get('X-STT-Enabled'),
       'x-dtmf-enabled': req.get('x-dtmf-enabled') || req.get('X-DTMF-Enabled'),
+      'x-bargein-grace-sec': req.get('x-bargein-grace-sec') || req.get('X-Bargein-Grace-Sec'),
       'x-tenant-id': req.get('x-tenant-id') || req.get('X-Tenant-ID')
     };
 

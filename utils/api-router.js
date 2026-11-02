@@ -166,6 +166,7 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
     const amdEnabled = tenant.amd?.enabled ?? (process.env.AMD_DEFAULT_ENABLED === 'true');
     const amdMode = tenant.amd?.mode || process.env.AMD_DEFAULT_MODE || 'active';
     const bargeinLevel = tenant.bargeinLevel ?? parseInt(process.env.BARGEIN_LEVEL || '3', 10);
+    const bargeinGraceSec = Number(tenant.bargeinGraceSec ?? process.env.BARGEIN_GRACE_SEC ?? 5);
     const codec = tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'g711_ulaw';
     const maxSec = tenant.maxDurationSec || parseInt(process.env.MAX_CALL_DURATION_SEC || '180', 10);
     const dtmfEnabled = tenant.dtmf?.enabled ?? (process.env.DTMF_DEFAULT_ENABLED !== 'false');
@@ -218,6 +219,22 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
           nivelBargein: bargeinLevel,
           purgaPlayout: 'Total (mod_audio_fork)',
           cancelamentoOpenAi: 'Imediato'
+        }
+      },
+      {
+        id: 'bargein_grace',
+        name: 'Período de Graça de Barge-In (Lockout Inicial)',
+        icon: '⏳',
+        category: 'Interação em Tempo Real',
+        active: bargeinGraceSec > 0,
+        badge: bargeinGraceSec > 0 ? `${bargeinGraceSec} SEGUNDOS` : 'DESATIVADO',
+        mode: `Bloqueio nos Primeiros ${bargeinGraceSec}s`,
+        detail: 'Impede que ruídos de linha, respiração ou cumprimentos iniciais ("Alô?") interrompam a saudação inicial da IA. Após os primeiros N segundos da chamada, o barge-in com corte de fala é liberado normalmente.',
+        parameters: {
+          periodoGraça: `${bargeinGraceSec}s`,
+          protecaoSaudacao: 'Ativa (speech_started bloqueado)',
+          liberacaoAutomatica: `Aos ${bargeinGraceSec}s de chamada`,
+          configuravel: 'Tenant, Header SIP (X-Bargein-Grace-Sec) ou Env'
         }
       },
       {

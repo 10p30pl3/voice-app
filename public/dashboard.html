@@ -1221,7 +1221,7 @@
 
       <!-- Filtros por Categoria -->
       <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;" id="vf-cat-filters">
-        <button class="btn btn-sm btn-primary" onclick="filterFeaturesCategory('all', this)">Todas as Features (10)</button>
+        <button class="btn btn-sm btn-primary" onclick="filterFeaturesCategory('all', this)">Todas as Features (11)</button>
         <button class="btn btn-sm" onclick="filterFeaturesCategory('DSP & Acústica', this)">DSP & Acústica</button>
         <button class="btn btn-sm" onclick="filterFeaturesCategory('Mídia & Codecs', this)">Mídia & Codecs</button>
         <button class="btn btn-sm" onclick="filterFeaturesCategory('Interação em Tempo Real', this)">Interação em Tempo Real</button>
@@ -1623,6 +1623,7 @@
               <span class="tag">Codec: ${c.codec}</span>
               ${c.amdEnabled ? '<span class="tag">AMD Ativo</span>' : ''}
               ${c.sttEnabled ? '<span class="tag">STT Ativo</span>' : ''}
+              ${c.isBargeinGraceActive ? `<span class="tag" style="background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border-color: rgba(139, 92, 246, 0.35); font-weight: 600;" title="Barge-in bloqueado temporariamente para proteger saudação inicial">⏳ Lockout Barge-in (${c.durationSec}s/${c.bargeinGraceSec || 5}s)</span>` : ''}
               ${recBadge}
               ${c.isMuted ? '<span class="tag" style="color: #f87171;">🔇 Mutado</span>' : ''}
               ${c.isOnHold ? '<span class="tag" style="color: #fbbf24;">⏸ Em Espera</span>' : ''}
@@ -2340,6 +2341,7 @@
         : f.badge.includes('NÍVEL') ? 'level'
         : f.badge.includes('G.711') ? 'purple'
         : f.badge.includes('MINUTOS') ? 'purple'
+        : f.badge.includes('SEGUNDOS') ? 'level'
         : f.active ? 'active' : 'muted';
 
       const paramEntries = Object.entries(f.parameters || {});
