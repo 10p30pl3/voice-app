@@ -887,16 +887,17 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   for (let i = 0; i < 200; i++) {
     assert.strictEqual(vad.process(Buffer.alloc(320)), false, 'silêncio não pode ser fala ativa');
   }
-  assert.strictEqual(vad.process(makeFrame(3000)), false, '1 frame isolado não dispara (ataque de 60ms)');
-  assert.strictEqual(vad.process(makeFrame(3000)), false);
-  assert.strictEqual(vad.process(makeFrame(3000)), true, '3 frames sustentados = fala ativa');
+  for (let i = 0; i < 7; i++) {
+    assert.strictEqual(vad.process(makeFrame(3000)), false, 'frames isolados (<8) não disparam');
+  }
+  assert.strictEqual(vad.process(makeFrame(3000)), true, '8 frames sustentados (160ms) = fala ativa');
   assert.strictEqual(vad.process(Buffer.alloc(320)), false, 'cauda silenciosa (hangover) não conta como fala ativa');
   for (let i = 0; i < 10; i++) vad.process(Buffer.alloc(320));
   assert.strictEqual(vad.speaking, false);
   // Ruído de fundo baixo constante não deve disparar
   const vad2 = new FrameVad();
   for (let i = 0; i < 300; i++) assert.strictEqual(vad2.process(makeFrame(120)), false);
-  console.log('   ✅ FrameVad (barge-in sem gate DSP não dispara por silêncio/ruído baixo) aprovado!');
+  console.log('   ✅ FrameVad (barge-in sem gate DSP calibrado: 160ms ataque, 800 RMS) aprovado!');
 
   console.log('====================================================');
   console.log('🎉 TODOS OS 9 BLOCOS DE QA PASSARAM COM 100% DE SUCESSO!');

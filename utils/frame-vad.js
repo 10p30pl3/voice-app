@@ -8,12 +8,12 @@
 class FrameVad {
   /**
    * @param {object} [opts]
-   * @param {number} [opts.minRms=350]        RMS mínimo (escala Int16) para considerar fala
-   * @param {number} [opts.noiseRatio=2.5]    Fala = RMS > pisoDeRuído * noiseRatio
-   * @param {number} [opts.attackFrames=3]    Frames consecutivos acima do limiar (3 x 20ms = 60ms)
+   * @param {number} [opts.minRms=800]        RMS mínimo (escala Int16) para considerar fala (calibrado telefonia)
+   * @param {number} [opts.noiseRatio=2.8]    Fala = RMS > pisoDeRuído * noiseRatio
+   * @param {number} [opts.attackFrames=8]    Frames consecutivos acima do limiar (8 x 20ms = 160ms de sustentação)
    * @param {number} [opts.releaseFrames=5]   Frames abaixo do limiar para encerrar a fala (100ms)
    */
-  constructor({ minRms = 350, noiseRatio = 2.5, attackFrames = 3, releaseFrames = 5 } = {}) {
+  constructor({ minRms = 800, noiseRatio = 2.8, attackFrames = 8, releaseFrames = 5 } = {}) {
     this.minRms = minRms;
     this.noiseRatio = noiseRatio;
     this.attackFrames = attackFrames;

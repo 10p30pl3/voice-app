@@ -279,8 +279,12 @@ class OpenAIS2SBridge {
     this.crosstalkEnrolledLogged = false;
 
     // VAD de energia por frame: detector de "fala ativa" quando o gate DSP não está em uso
-    // (modos 'wespeaker', 'ecapa' e 'none'), evitando barge-in por frames de silêncio.
-    this.frameVad = this.crosstalkFilter ? null : new FrameVad();
+    // (modos 'wespeaker', 'ecapa' e 'none'), evitando barge-in por frames de silêncio ou ruídos de fundo.
+    const frameVadMinRms = Number(this.tenant?.bargeinMinRms || process.env.BARGEIN_MIN_RMS || 800);
+    const frameVadAttack = Number(this.tenant?.bargeinAttackFrames || process.env.BARGEIN_ATTACK_FRAMES || 8);
+    this.frameVad = this.crosstalkFilter
+      ? null
+      : new FrameVad({ minRms: frameVadMinRms, attackFrames: frameVadAttack, noiseRatio: 2.8 });
 
     // Estado da Biometria Neural ('wespeaker' / 'ecapa')
     this.isSecondaryVoiceBlocked = false;
@@ -322,8 +326,8 @@ class OpenAIS2SBridge {
     if (this.isSafetyExpiring) return false;
     if (this.isGreetingInProgress || this.isMicMutedByGrace) return false;
     if (this.isBargeinGraceActive()) return false;
-    // Carência mínima de 250ms após o início do áudio do agente para evitar falso corte pelo eco/cauda do usuário
-    if (this.agentPlaybackStartTime && Date.now() - this.agentPlaybackStartTime < 250) {
+    // Carência mínima de 450ms após o início do áudio do agente para evitar falso corte pelo eco/cauda do usuário
+    if (this.agentPlaybackStartTime && Date.now() - this.agentPlaybackStartTime < 450) {
       return false;
     }
     return true;

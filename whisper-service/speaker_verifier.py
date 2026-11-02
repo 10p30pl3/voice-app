@@ -259,10 +259,12 @@ class SpeakerStream:
         if self.in_burst and self.idle >= self.idle_samples:
             self.in_burst = False
             self.reject_run = 0
-            self.frames = []
-            self.frames_len = 0
-            self.new_samples = 0
-            return "idle"
+            if self.enrolled:
+                self.frames = []
+                self.frames_len = 0
+                self.new_samples = 0
+                return "idle"
+            return None
         return None
 
     def run(self, work: str):
