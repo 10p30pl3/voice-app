@@ -220,9 +220,10 @@ class CrosstalkFilter {
           : Math.max(1200, this.userVoiceRms * 0.60))
       : Math.max(300, this.userVoiceRms * this.ratio);
 
+    const requiredAttack = isBiometricMatch ? 1 : this.attackFrames;
     if (feat.rms >= dynamicThreshold) {
       this.consecutiveAbove++;
-      if (this.isGateOpen || this.consecutiveAbove >= this.attackFrames) {
+      if (this.isGateOpen || this.consecutiveAbove >= requiredAttack) {
         this.isGateOpen = true;
         this.hangoverCounter = this.hangoverFrames;
         this.speechFramesCount++;

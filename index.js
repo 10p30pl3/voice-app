@@ -900,6 +900,12 @@ class OpenAIS2SBridge {
 
         const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
 
+        // Barge-in Instantâneo (<20ms): se a voz do titular for detectada enquanto o agente estiver falando,
+        // interrompe imediatamente o áudio local no FreeSWITCH, sem esperar o roundtrip de rede da OpenAI!
+        if (isPrimaryVoice && this.isAgentTalking && this.canTriggerBargeIn()) {
+          this.triggerBargeIn('local_biometric_vad');
+        }
+
         // Encaminha áudio ao Whisper: se o AMD ainda estiver decidindo nos primeiros ~1.5s, envia o áudio bruto;
         // após a saudação (!isGraceActive), envia o effectiveBuffer filtrado para não transcrever vozes de fundo!
         if (this.whisperSession && !this.isToneProbe) {
