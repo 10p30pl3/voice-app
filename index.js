@@ -251,7 +251,7 @@ class OpenAIS2SBridge {
     );
     this.crosstalkFilter = new CrosstalkFilter({
       ratio: crosstalkRatio,
-      hangoverMs: 300
+      hangoverMs: 600
     });
 
     this.recorder = null;
@@ -286,15 +286,9 @@ class OpenAIS2SBridge {
 
   canTriggerBargeIn() {
     if (this.isSafetyExpiring) return false;
-    if (this.graceCompleted) {
-      if (this.crosstalkFilter && !this.crosstalkFilter.isGateOpen) {
-        return false;
-      }
-      return true;
-    }
+    if (this.graceCompleted) return true;
     if (this.isGreetingInProgress || this.isMicMutedByGrace) return false;
     if (this.isBargeinGraceActive()) return false;
-    if (this.crosstalkFilter && !this.crosstalkFilter.isGateOpen) return false;
     return true;
   }
 
@@ -897,18 +891,20 @@ class OpenAIS2SBridge {
 
         // Filtro de Voz de Fundo (Crosstalk Gate): identifica se o áudio pertence ao usuário principal
         // ou se é voz secundária/conversa de fundo mais baixa (<40% do volume do usuário).
+        // Quando o gate fecha (!isPrimaryVoice), enviamos silêncio digital (zeros) em vez de interromper
+        // os pacotes RTP, garantindo que o server_vad da OpenAI contabilize o silence_duration_ms e dispare speech_stopped!
         const isPrimaryVoice = this.crosstalkFilter ? this.crosstalkFilter.process(buffer) : true;
 
         if (
           !this.isToneProbe &&
           !amdStillDeciding &&
           !isGraceActive &&
-          isPrimaryVoice &&
           this.openaiReady &&
           this.openaiSocket &&
           this.openaiSocket.readyState === WebSocket.OPEN
         ) {
-          const outboundAudio = this.useG711 ? linear16ToMulaw(buffer) : upsample8to24(buffer);
+          const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
+          const outboundAudio = this.useG711 ? linear16ToMulaw(effectiveBuffer) : upsample8to24(effectiveBuffer);
           this.openaiSocket.send(
             JSON.stringify({
               type: 'input_audio_buffer.append',
@@ -1019,7 +1015,7 @@ class OpenAIS2SBridge {
           input: {
             turn_detection: {
               type: 'server_vad',
-              threshold: Math.min(0.85, Math.max(0.60, vadThreshold + 0.12)),
+              threshold: vadThreshold,
               prefix_padding_ms: prefixPaddingMs,
               silence_duration_ms: silenceDurationMs
             }

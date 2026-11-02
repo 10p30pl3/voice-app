@@ -8,10 +8,11 @@
 class CrosstalkFilter {
   constructor({
     ratio = 0.40,               // Vozes de fundo são as que têm menos de 40% do volume do usuário
-    initialUserRms = 1000,      // Estimativa inicial do volume de fala (Int16 PCM)
-    minUserRms = 500,           // Limite inferior para a calibração do usuário
-    maxUserRms = 8000,          // Limite superior de saturação
-    hangoverMs = 300,           // Janela de sustentação para não picotar final de palavras
+    initialUserRms = 450,       // Estimativa inicial realista de voz telefônica (Int16 PCM 8kHz)
+    minUserRms = 300,           // Limite inferior para a calibração do usuário
+    maxUserRms = 1200,          // Limite superior para evitar que picos/estalos deixem o filtro surdo
+    maxThresholdRms = 350,      // Teto máximo do gate: qualquer voz >= 350 RMS sempre passa como usuário principal
+    hangoverMs = 600,           // Janela de sustentação (600ms) para não picotar pausas ou final de palavras
     frameDurationMs = 20,       // Duração de cada chunk RTP (20ms = 160 samples a 8kHz)
     minFloorRms = 80            // Piso mínimo absoluto de ruído ambiente
   } = {}) {
@@ -19,6 +20,7 @@ class CrosstalkFilter {
     this.userVoiceRms = initialUserRms;
     this.minUserRms = minUserRms;
     this.maxUserRms = maxUserRms;
+    this.maxThresholdRms = maxThresholdRms;
     this.hangoverMs = hangoverMs;
     this.frameDurationMs = frameDurationMs;
     this.hangoverFrames = Math.max(1, Math.ceil(hangoverMs / frameDurationMs));
@@ -50,16 +52,26 @@ class CrosstalkFilter {
   }
 
   /**
+   * Retorna o limiar dinâmico atual (40% da voz do usuário, limitado entre minFloorRms e maxThresholdRms)
+   */
+  getDynamicThreshold() {
+    return Math.min(
+      this.maxThresholdRms,
+      Math.max(this.minFloorRms, this.userVoiceRms * this.ratio)
+    );
+  }
+
+  /**
    * Processa um chunk de áudio e determina se pertence ao usuário principal ou a voz de fundo.
    * @param {Buffer} buffer - Chunk PCM16 de 20ms
-   * @returns {boolean} true se deve passar para a OpenAI, false se deve ser ignorado (voz de fundo)
+   * @returns {boolean} true se deve passar para a OpenAI, false se deve ser silenciado (voz de fundo)
    */
   process(buffer) {
     const rms = this.calculateRms(buffer);
     this.lastRms = rms;
 
-    // Limiar dinâmico: 40% da voz real do usuário
-    const dynamicThreshold = Math.max(this.minFloorRms, this.userVoiceRms * this.ratio);
+    // Limiar dinâmico: 40% da voz real do usuário (com teto de segurança para vozes suaves)
+    const dynamicThreshold = this.getDynamicThreshold();
 
     // Atualiza ruído de fundo se o sinal for muito baixo (silêncio de linha)
     if (rms < dynamicThreshold * 0.5 && rms > 0) {
@@ -73,15 +85,16 @@ class CrosstalkFilter {
       this.speechFramesCount++;
       this.passedFramesCount++;
 
-      // Atualiza o volume real do usuário suavemente
-      if (rms >= this.minUserRms && rms <= this.maxUserRms) {
-        this.userVoiceRms = 0.08 * rms + 0.92 * this.userVoiceRms;
+      // Atualiza o volume real do usuário suavemente (limitando picos de microfone a maxUserRms)
+      if (rms >= this.minUserRms) {
+        const clampedRms = Math.min(rms, this.maxUserRms);
+        this.userVoiceRms = 0.08 * clampedRms + 0.92 * this.userVoiceRms;
       }
 
       return true;
     }
 
-    // Se estiver na janela de sustentação (hangover de 300ms), mantém o áudio aberto
+    // Se estiver na janela de sustentação (hangover de 600ms), mantém o áudio aberto
     // para evitar que o final de palavras ou fonemas suaves sejam cortados
     if (this.hangoverCounter > 0) {
       this.hangoverCounter--;
@@ -90,7 +103,7 @@ class CrosstalkFilter {
       return true;
     }
 
-    // Hangover esgotado e sinal abaixo do limiar: voz de fundo ou ruído secundário!
+    // Hangover esgotado e sinal abaixo do limiar: voz de fundo ou silêncio -> substituir por silêncio digital
     this.isGateOpen = false;
     this.blockedFramesCount++;
     return false;
@@ -102,7 +115,7 @@ class CrosstalkFilter {
   getMetrics() {
     return {
       userVoiceRms: Math.round(this.userVoiceRms),
-      backgroundThresholdRms: Math.round(Math.max(this.minFloorRms, this.userVoiceRms * this.ratio)),
+      backgroundThresholdRms: Math.round(this.getDynamicThreshold()),
       lastRms: Math.round(this.lastRms),
       isGateOpen: this.isGateOpen,
       ratio: this.ratio,
