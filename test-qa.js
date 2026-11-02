@@ -447,6 +447,9 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
     isSafetyExpiring: false,
     isAgentTalking: true,
     killed: false,
+    isBargeinGraceActive() {
+      return false;
+    },
     mediaBridge: {
       killAudio: () => { graceHarness.killed = true; }
     },
@@ -507,6 +510,9 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
     recordTranscriptTurn(speaker, text) {
       return this.recorder.addTranscript(speaker, text);
     },
+    isBargeinGraceActive() {
+      return false;
+    },
     mediaBridge: {
       killAudio: () => { bargeInKilled = true; }
     },
@@ -522,6 +528,12 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   const dtmfMethods = eval(`(class { ${handleDtmfMatch[0]} })`).prototype;
   dtmfHarness.handleDtmf = dtmfMethods.handleDtmf.bind(dtmfHarness);
   dtmfHarness.flushDtmfBuffer = dtmfMethods.flushDtmfBuffer.bind(dtmfHarness);
+
+  // Valida que durante o período de carência (isBargeinGraceActive = true), DTMF é ignorado
+  dtmfHarness.isBargeinGraceActive = () => true;
+  dtmfHarness.handleDtmf({ dtmf: '7' });
+  assert.strictEqual(dtmfHarness.dtmfBuffer, '', 'Dígitos DTMF devem ser ignorados durante período de carência');
+  dtmfHarness.isBargeinGraceActive = () => false;
 
   // Digita '1', '2', '3', '#' (flush imediato no '#')
   dtmfHarness.handleDtmf({ dtmf: '1' });

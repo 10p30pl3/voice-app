@@ -243,6 +243,8 @@ class OpenAIS2SBridge {
     this.lastTurn = null;
     this.activeAudioFormat = this.useG711 ? 'g711_ulaw' : 'pcm24k';
     this.cleanupHandler = null;
+    this.greetingResponsePending = false;
+    this.graceEndLogged = false;
 
     this.handleEslEvent = this.handleEslEvent.bind(this);
     this.handleDtmf = this.handleDtmf.bind(this);
@@ -268,8 +270,13 @@ class OpenAIS2SBridge {
     if (!this.canTriggerBargeIn()) {
       const elapsedSec = this.startedAt ? (Date.now() - this.startedAt.getTime()) / 1000 : 0;
       console.log(
-        `[${this.callId}] 🛡️ [BARGE-IN GRACE] Tentativa de Barge-In (${reason}) bloqueada: ${elapsedSec.toFixed(1)}s < ${this.bargeinGraceSec}s (Proteção de Saudação Inicial).`
+        `[${this.callId}] 🛡️ [BARGE-IN GRACE] Tentativa de interrupção (${reason}) bloqueada: ${elapsedSec.toFixed(1)}s < ${this.bargeinGraceSec}s (Pedido do cliente ignorado durante saudação).`
       );
+      if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+        try {
+          this.openaiSocket.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+        } catch {}
+      }
       return false;
     }
 
@@ -382,6 +389,21 @@ class OpenAIS2SBridge {
       }
 
       if (body.type === 'response.created' || body.type === 'response.output_item.added') {
+        if (this.greetingResponsePending && body.type === 'response.created') {
+          this.greetingResponsePending = false;
+        } else if (this.isBargeinGraceActive() && body.type === 'response.created') {
+          console.log(
+            `[${this.callId}] 🛡️ [BARGE-IN GRACE] Resposta da IA cancelada: pedido do cliente ignorado durante o período de carência.`
+          );
+          if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+            try {
+              this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
+              this.openaiSocket.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+            } catch {}
+          }
+          return;
+        }
+
         if (!this.isAgentTalking) {
           this.isAgentTalking = true;
           this.mediaBridge.startPlaybackStream();
@@ -428,7 +450,14 @@ class OpenAIS2SBridge {
         body.type === 'conversation.item.input_audio_transcription.completed' &&
         body.transcript
       ) {
-        this.recordTranscriptTurn('Cliente', body.transcript);
+        if (this.isBargeinGraceActive()) {
+          console.log(
+            `[${this.callId}] 🛡️ [BARGE-IN GRACE] Transcrição do cliente ignorada durante carência: "${body.transcript}"`
+          );
+          this.recordTranscriptTurn('Cliente', `[Ignorado na Saudação]: ${body.transcript}`);
+        } else {
+          this.recordTranscriptTurn('Cliente', body.transcript);
+        }
       }
 
       if (['response.output_audio.done', 'response.done'].includes(body.type)) {
@@ -459,6 +488,11 @@ class OpenAIS2SBridge {
     if (this.isTerminated) return;
     const digit = evt?.dtmf || evt?.digit;
     if (!digit) return;
+
+    if (this.isBargeinGraceActive()) {
+      console.log(`[${this.callId}] 🛡️ [BARGE-IN GRACE] Dígito DTMF '${digit}' ignorado durante o período de carência (saudação inicial).`);
+      return;
+    }
 
     console.log(`[${this.callId}] 🔢 [DTMF] Dígito capturado: '${digit}'`);
 
@@ -501,6 +535,12 @@ class OpenAIS2SBridge {
       this.dtmfTimer = null;
     }
     if (!this.dtmfBuffer || this.isTerminated) return;
+
+    if (this.isBargeinGraceActive()) {
+      console.log(`[${this.callId}] 🛡️ [BARGE-IN GRACE] Sequência DTMF "${this.dtmfBuffer}" ignorada durante o período de carência.`);
+      this.dtmfBuffer = '';
+      return;
+    }
 
     const digits = this.dtmfBuffer;
     this.dtmfBuffer = '';
@@ -625,7 +665,12 @@ class OpenAIS2SBridge {
       });
 
       this.whisperSession.on('transcript', (stt) => {
-        this.recordTranscriptTurn('Cliente', stt.text);
+        if (this.isBargeinGraceActive()) {
+          console.log(`[${this.callId}] 🛡️ [BARGE-IN GRACE] Transcrição do cliente ignorada durante carência: "${stt.text}"`);
+          this.recordTranscriptTurn('Cliente', `[Ignorado na Saudação]: ${stt.text}`);
+        } else {
+          this.recordTranscriptTurn('Cliente', stt.text);
+        }
       });
 
       this.whisperSession.start();
@@ -714,9 +759,25 @@ class OpenAIS2SBridge {
           this.whisperSession.amdMode === 'active' &&
           !this.whisperSession.decisionReceived;
 
+        // Período de Graça de Barge-in: Durante a janela inicial (ex: 8s), qualquer fala ou pedido do cliente não deve ser processado e deve ser ignorado pela IA
+        const isGraceActive = this.isBargeinGraceActive();
+
+        if (!isGraceActive && !this.graceEndLogged && this.bargeinGraceSec > 0 && this.startedAt) {
+          this.graceEndLogged = true;
+          console.log(
+            `[${this.callId}] ⏳ [BARGE-IN GRACE] Período de carência finalizado (${this.bargeinGraceSec}s). Processamento de fala e pedidos do cliente liberados.`
+          );
+          if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+            try {
+              this.openaiSocket.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+            } catch {}
+          }
+        }
+
         if (
           !this.isToneProbe &&
           !amdStillDeciding &&
+          !isGraceActive &&
           this.openaiReady &&
           this.openaiSocket &&
           this.openaiSocket.readyState === WebSocket.OPEN
@@ -868,6 +929,7 @@ class OpenAIS2SBridge {
         instructions: 'Faça uma saudação inicial curta e amigável.'
       }
     };
+    this.greetingResponsePending = true;
     this.openaiSocket.send(JSON.stringify(responseCreate));
 
     // Somente após session.update e response.create liberamos o envio de input_audio_buffer.append

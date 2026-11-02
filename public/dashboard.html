@@ -1844,7 +1844,7 @@
                 <span class="tag">Codec: ${c.codec || 'g711_ulaw'}</span>
                 ${c.amdEnabled ? '<span class="tag">AMD Ativo</span>' : ''}
                 ${c.sttEnabled ? '<span class="tag">STT Ativo</span>' : ''}
-                ${c.isBargeinGraceActive ? `<span class="tag" style="background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border-color: rgba(139, 92, 246, 0.35); font-weight: 600;" title="Barge-in bloqueado temporariamente para proteger saudação inicial">⏳ Lockout Barge-in (${c.durationSec}s/${c.bargeinGraceSec || 8}s)</span>` : ''}
+                ${c.isBargeinGraceActive ? `<span class="tag" style="background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border-color: rgba(139, 92, 246, 0.35); font-weight: 600;" title="Período de carência ativo: pedidos e falas do cliente são completamente ignorados para proteger a saudação inicial da IA">⏳ Carência Barge-in (${c.durationSec}s/${c.bargeinGraceSec || 8}s - Pedido Ignorado)</span>` : ''}
                 ${recBadge}
                 ${c.isMuted ? '<span class="tag" style="color: #f87171;">🔇 Mutado</span>' : ''}
                 ${c.isOnHold ? '<span class="tag" style="color: #fbbf24;">⏸ Em Espera</span>' : ''}

@@ -493,11 +493,11 @@ async function testBargeinGrace({ tenantManager } = {}) {
   const durationMs = Math.max(0.1, Number((process.hrtime.bigint() - start) / 1000000n));
   return {
     id: 'bargein_grace',
-    name: 'Período de Graça de Barge-In (Lockout Inicial)',
+    name: 'Período de Graça de Barge-In (Ignorar Pedido na Saudação)',
     passed: true,
     durationMs: Number(durationMs.toFixed(2)),
     result: 'APROVADO',
-    details: `Lockout de ${graceSec}s calibrado com sucesso: bloqueia interrupção nos primeiros ${graceSec}s (protegendo a saudação da IA contra ruídos de linha/cumprimentos) e libera barge-in automaticamente aos ${graceSec}s.`
+    details: `Período de carência de ${graceSec}s calibrado com sucesso: pedidos e áudio do cliente são completamente ignorados nos primeiros ${graceSec}s (protegendo a saudação inicial da IA contra ruídos de linha e cumprimentos precoces), liberando o processamento de pedidos automaticamente aos ${graceSec}s.`
   };
 }
 

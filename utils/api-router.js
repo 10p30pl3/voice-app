@@ -226,16 +226,16 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       },
       {
         id: 'bargein_grace',
-        name: 'Período de Graça de Barge-In (Lockout Inicial)',
+        name: 'Período de Graça de Barge-In (Ignorar Pedido na Saudação)',
         icon: '⏳',
         category: 'Interação em Tempo Real',
         active: bargeinGraceSec > 0,
         badge: bargeinGraceSec > 0 ? `${bargeinGraceSec} SEGUNDOS` : 'DESATIVADO',
-        mode: `Bloqueio nos Primeiros ${bargeinGraceSec}s`,
-        detail: 'Impede que ruídos de linha, respiração ou cumprimentos iniciais ("Alô?") interrompam a saudação inicial da IA. Após os primeiros N segundos da chamada, o barge-in com corte de fala é liberado normalmente.',
+        mode: `Ignora Pedidos nos Primeiros ${bargeinGraceSec}s`,
+        detail: 'Durante os primeiros N segundos (saudação inicial da IA), qualquer pedido ou fala do cliente é completamente ignorado e não é processado pela IA, descartando ruídos de linha, saudações precoces e evitando respostas indevidas.',
         parameters: {
           periodoGraça: `${bargeinGraceSec}s`,
-          protecaoSaudacao: 'Ativa (speech_started bloqueado)',
+          protecaoSaudacao: 'Ativa (pedidos do cliente ignorados e buffer limpo)',
           liberacaoAutomatica: `Aos ${bargeinGraceSec}s de chamada`,
           configuravel: 'Tenant, Header SIP (X-Bargein-Grace-Sec) ou Env'
         }
