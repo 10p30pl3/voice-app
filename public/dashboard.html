@@ -870,7 +870,10 @@
         <div class="drawer-title" id="drawer-call-id">Chamada: --</div>
         <div class="drawer-subtitle" id="drawer-call-parties">Transcrição dialogada em tempo real</div>
       </div>
-      <button class="btn btn-sm" onclick="closeDrawer()">Fechar ✕</button>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button class="btn btn-sm" onclick="copyCurrentLiveTranscript()" title="Copiar Transcrição">📋 Copiar</button>
+        <button class="btn btn-sm" onclick="closeDrawer()">✕</button>
+      </div>
     </div>
     <div class="drawer-body" id="drawer-transcript-body">
       <div style="text-align: center; color: var(--text-muted); padding: 40px;">
@@ -1222,6 +1225,18 @@
               <span>${speechText}</span>
             </div>
 
+            <!-- Preview da Última Fala em Tempo Real -->
+            ${c.lastTranscript ? `
+              <div style="font-size: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 12px; color: #cbd5e1; display: flex; align-items: flex-start; gap: 8px;">
+                <span style="font-weight: 700; color: ${c.lastTranscript.speaker === 'Cliente' ? '#34d399' : '#60a5fa'}; white-space: nowrap;">
+                  ${c.lastTranscript.speaker === 'Cliente' ? '👤 Cliente:' : '🤖 IA:'}
+                </span>
+                <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  ${escapeHtml(c.lastTranscript.text)}
+                </span>
+              </div>
+            ` : ''}
+
             <!-- Tags Acústicas e Codec -->
             <div class="acoustic-tags">
               <span class="tag highlight">Ruído: ${c.noiseProfile || 'SILENCE'}</span>
@@ -1290,13 +1305,38 @@
       document.getElementById('live-drawer').classList.remove('open');
     }
 
+    let currentLiveTurns = [];
+
+    function copyCurrentLiveTranscript() {
+      if (!currentLiveTurns || currentLiveTurns.length === 0) {
+        return showToast('Nenhuma fala para copiar ainda', 'info');
+      }
+      const txt = currentLiveTurns.map(t => `[${t.timestamp || ''}] ${t.speaker}: ${t.text}`).join('\n');
+      navigator.clipboard.writeText(txt).then(() => {
+        showToast('Transcrição copiada com sucesso!', 'success');
+      });
+    }
+
     async function fetchDrawerTranscript(callId) {
       if (!callId) return;
       try {
         const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/transcript`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (res.status === 404) {
+            const body = document.getElementById('drawer-transcript-body');
+            if (!document.getElementById('drawer-end-badge')) {
+              const notice = document.createElement('div');
+              notice.id = 'drawer-end-badge';
+              notice.style.cssText = 'text-align: center; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; padding: 10px; border-radius: 8px; font-size: 12px; margin-top: 10px; font-weight: 600;';
+              notice.textContent = '📞 Chamada finalizada.';
+              body.appendChild(notice);
+            }
+          }
+          return;
+        }
         const data = await res.json();
         const turns = data.transcript || [];
+        currentLiveTurns = turns;
         const body = document.getElementById('drawer-transcript-body');
 
         if (turns.length === 0) {
@@ -1310,12 +1350,14 @@
 
         body.innerHTML = turns.map(t => {
           const isClient = t.speaker === 'Cliente';
+          const isDtmf = t.text && t.text.includes('[DTMF:');
           const bubbleClass = isClient ? 'cliente' : 'atendente';
-          const icon = isClient ? '👤' : '🤖';
+          const icon = isDtmf ? '🔢' : (isClient ? '👤' : '🤖');
+          const speakerLabel = isDtmf ? 'Cliente (DTMF)' : t.speaker;
           return `
             <div class="transcript-bubble ${bubbleClass}">
               <div class="transcript-meta">
-                <span>${icon} ${escapeHtml(t.speaker)}</span>
+                <span>${icon} ${escapeHtml(speakerLabel)}</span>
                 <span style="opacity: 0.7;">${escapeHtml(t.timestamp || '')}</span>
               </div>
               <div>${escapeHtml(t.text)}</div>

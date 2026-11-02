@@ -229,6 +229,7 @@ class OpenAIS2SBridge {
     this.isMuted = false;
     this.isOnHold = false;
     this.transcriptLog = [];
+    this.lastTurn = null;
 
     this.handleEslEvent = this.handleEslEvent.bind(this);
     this.handleDtmf = this.handleDtmf.bind(this);
@@ -336,13 +337,32 @@ class OpenAIS2SBridge {
         this.mediaBridge.pushAudioChunk(pcm8k);
       }
 
+      // 1. Transcrição do Atendente (IA) via eventos da OpenAI Realtime
       if (
-        (body.type === 'response.output_audio_transcript.done' || body.type === 'response.audio_transcript.done') &&
+        (body.type === 'response.output_audio_transcript.done' ||
+         body.type === 'response.audio_transcript.done') &&
         body.transcript
       ) {
-        if (this.whisperSession && this.whisperSession.isSttEnabled) {
-          this.recordTranscriptTurn('Atendente', body.transcript);
+        this.recordTranscriptTurn('Atendente', body.transcript);
+      } else if (body.type === 'response.done' && body.response?.output) {
+        // Fallback para capturar transcript do response.done caso evento individual não tenha sido disparado
+        for (const outItem of body.response.output) {
+          if (outItem.content) {
+            for (const c of outItem.content) {
+              if (c.transcript) {
+                this.recordTranscriptTurn('Atendente', c.transcript);
+              }
+            }
+          }
         }
+      }
+
+      // 2. Transcrição da fala do Cliente recebida nativamente da OpenAI Realtime
+      if (
+        body.type === 'conversation.item.input_audio_transcription.completed' &&
+        body.transcript
+      ) {
+        this.recordTranscriptTurn('Cliente', body.transcript);
       }
 
       if (['response.output_audio.done', 'response.done'].includes(body.type)) {
@@ -423,9 +443,7 @@ class OpenAIS2SBridge {
 
     console.log(`[${this.callId}] 🔢 [DTMF FLUSH] Sequência completa enviada à IA: "${digits}"`);
 
-    if (this.whisperSession && this.whisperSession.isSttEnabled) {
-      this.recordTranscriptTurn('Cliente', `[DTMF: ${digits}]`);
-    }
+    this.recordTranscriptTurn('Cliente', `[DTMF: ${digits}]`);
 
     if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
       this.openaiSocket.send(
@@ -705,6 +723,9 @@ class OpenAIS2SBridge {
       type: 'session.update',
       session: {
         type: 'realtime',
+        input_audio_transcription: {
+          model: 'whisper-1'
+        },
         audio: {
           input: {
             turn_detection: {
@@ -759,10 +780,22 @@ class OpenAIS2SBridge {
     const cleanText = String(text || '').trim();
     if (!cleanText) return null;
 
+    // Deduplicação: se a mesma fala do mesmo interlocutor chegar em menos de 3.5 segundos, não duplica
+    const now = Date.now();
+    if (
+      this.lastTurn &&
+      this.lastTurn.speaker === speaker &&
+      this.lastTurn.text.toLowerCase() === cleanText.toLowerCase() &&
+      now - this.lastTurn.time < 3500
+    ) {
+      return this.lastTurn.entry;
+    }
+
     if (this.recorder && !this.recorder.isStopped && !this.recorder.isPaused) {
       const entry = this.recorder.addTranscript(speaker, cleanText);
       if (entry) {
         this.transcriptLog.push(entry);
+        this.lastTurn = { speaker, text: cleanText, time: now, entry };
         return entry;
       }
     }
@@ -772,12 +805,14 @@ class OpenAIS2SBridge {
     const formatted = `[${timestamp}] ${role}: ${cleanText}`;
     const entry = { timestamp, speaker: role, text: cleanText, formatted };
     this.transcriptLog.push(entry);
+    this.lastTurn = { speaker, text: cleanText, time: now, entry };
     console.log(`[${this.callId}] 📝 ${formatted}`);
     return entry;
   }
 
   getCallInfo(includeTranscript = false) {
     const durationSec = this.startedAt ? Math.floor((Date.now() - this.startedAt.getTime()) / 1000) : 0;
+    const lastTurnEntry = this.transcriptLog.length > 0 ? this.transcriptLog[this.transcriptLog.length - 1] : null;
     const info = {
       callId: this.callId,
       channelUuid: this.channelUuid,
@@ -799,7 +834,8 @@ class OpenAIS2SBridge {
       recordingPaused: !!(this.recorder && this.recorder.isPaused),
       recordingFile: this.recorder ? this.recorder.fileName : null,
       transcriptFile: this.recorder ? this.recorder.transcriptFileName : null,
-      transcriptTurnsCount: this.transcriptLog.length
+      transcriptTurnsCount: this.transcriptLog.length,
+      lastTranscript: lastTurnEntry
     };
 
     if (includeTranscript) {
