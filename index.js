@@ -1140,16 +1140,17 @@ class OpenAIS2SBridge {
       };
     }
 
+    if (this.tenant.voice) {
+      sessionUpdate.session.audio.output = {
+        ...(sessionUpdate.session.audio.output || {}),
+        voice: this.tenant.voice
+      };
+    }
+
     if (this.tenant.openaiPromptId) {
       sessionUpdate.session.prompt = { id: this.tenant.openaiPromptId };
     } else if (this.tenant.instructions) {
       sessionUpdate.session.instructions = this.tenant.instructions;
-      if (this.tenant.voice) {
-        sessionUpdate.session.audio.output = {
-          ...(sessionUpdate.session.audio.output || {}),
-          voice: this.tenant.voice
-        };
-      }
     }
 
     this.openaiSocket.send(JSON.stringify(sessionUpdate));
