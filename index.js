@@ -256,6 +256,7 @@ class OpenAIS2SBridge {
     this.crosstalkEnrolledLogged = false;
 
     this.recorder = null;
+    this.isResponseCancelled = false;
     this.dtmfBuffer = '';
     this.dtmfTimer = null;
     this.startedAt = null;
@@ -345,6 +346,7 @@ class OpenAIS2SBridge {
 
     console.log(`[${this.callId}] 🎤 BARGE-IN: Interrompendo agente imediatamente (${reason})...`);
     this.isAgentTalking = false;
+    this.isResponseCancelled = true;
     this.mediaBridge.killAudio();
     if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
       try {
@@ -452,6 +454,7 @@ class OpenAIS2SBridge {
       }
 
       if (body.type === 'response.created' || body.type === 'response.output_item.added') {
+        this.isResponseCancelled = false;
         if (this.greetingResponsePending && body.type === 'response.created') {
           this.greetingResponsePending = false;
           this.greetingResponseId = body.response?.id;
@@ -476,11 +479,15 @@ class OpenAIS2SBridge {
           this.mediaBridge.startPlaybackStream();
         }
       } else if (body.type === 'response.cancelled') {
+        this.isResponseCancelled = false;
         this.isAgentTalking = false;
         this.mediaBridge.killAudio();
       }
 
       if (body.type === 'response.output_audio.delta' && body.delta) {
+        if (this.isResponseCancelled) {
+          return;
+        }
         if (!this.isAgentTalking) {
           this.isAgentTalking = true;
           this.mediaBridge.startPlaybackStream();
