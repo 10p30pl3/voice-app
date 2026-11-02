@@ -41,6 +41,9 @@ function readJsonBody(req, maxBytes = 256 * 1024) {
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key'
@@ -367,7 +370,9 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
           res.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
             'Content-Length': Buffer.byteLength(html),
-            'Cache-Control': 'no-cache'
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
           });
           if (req.method === 'HEAD') {
             res.end();

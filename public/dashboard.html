@@ -1006,6 +1006,10 @@
 
     <!-- Indicadores de Cluster -->
     <div class="cluster-status">
+      <div class="status-pill" id="pill-gateway" title="Conexão com a API Gateway (HTTP / Mídia)">
+        <span class="dot online" id="dot-gateway"></span>
+        <span>Gateway: <strong id="val-gateway">Conectado</strong></span>
+      </div>
       <div class="status-pill" id="pill-fs" title="Cluster FreeSWITCH">
         <span class="dot" id="dot-fs"></span>
         <span>FreeSWITCH: <strong id="val-fs">--</strong></span>
@@ -1604,6 +1608,32 @@
       }, 3500);
     }
 
+    // Helper centralizado com anti-cache e timestamp para garantir dados 100% em tempo real
+    async function apiFetch(url, options = {}) {
+      const opts = { ...options };
+      opts.cache = 'no-store';
+      opts.headers = {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        ...(opts.headers || {})
+      };
+      const separator = url.includes('?') ? '&' : '?';
+      const cleanUrl = (!opts.method || opts.method.toUpperCase() === 'GET')
+        ? `${url}${separator}_t=${Date.now()}`
+        : url;
+      return fetch(cleanUrl, opts);
+    }
+
+    function updateGatewayStatus(isOnline) {
+      const dot = document.getElementById('dot-gateway');
+      const val = document.getElementById('val-gateway');
+      if (dot && val) {
+        dot.className = isOnline ? 'dot online' : 'dot danger';
+        val.textContent = isOnline ? 'Conectado' : 'Offline';
+      }
+    }
+
     function switchTab(tabId) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -1614,6 +1644,7 @@
       const targetContent = document.getElementById(`tab-${tabId}`);
       if (targetContent) targetContent.classList.add('active');
 
+      if (tabId === 'calls') fetchCallsData();
       if (tabId === 'features') fetchVoiceFeatures();
       if (tabId === 'recordings') fetchRecordingsData();
       if (tabId === 'tenants') fetchTenantsData();
@@ -1666,8 +1697,12 @@
     // -------------------------------------------------------------
     async function fetchClusterStatus() {
       try {
-        const res = await fetch('/v1/status');
-        if (!res.ok) return;
+        const res = await apiFetch('/v1/status');
+        if (!res.ok) {
+          updateGatewayStatus(false);
+          return;
+        }
+        updateGatewayStatus(true);
         const data = await res.json();
 
         // Uptime
@@ -1696,7 +1731,9 @@
         document.getElementById('val-drachtio').textContent = drConnected ? 'Conectado' : 'Offline';
         const dotDr = document.getElementById('dot-drachtio');
         dotDr.className = drConnected ? 'dot online' : 'dot danger';
-      } catch (err) {}
+      } catch (err) {
+        updateGatewayStatus(false);
+      }
     }
 
     // -------------------------------------------------------------
@@ -1704,27 +1741,41 @@
     // -------------------------------------------------------------
     async function fetchCallsData() {
       try {
-        const res = await fetch('/v1/calls');
-        if (!res.ok) return;
+        const res = await apiFetch('/v1/calls');
+        if (!res.ok) {
+          updateGatewayStatus(false);
+          return;
+        }
+        updateGatewayStatus(true);
         const data = await res.json();
         const calls = data.calls || [];
         cachedCalls = calls;
 
         // Atualiza contadores
         const count = calls.length;
-        document.getElementById('stat-active-calls').textContent = count;
+        const statCallsEl = document.getElementById('stat-active-calls');
+        if (statCallsEl) statCallsEl.textContent = count;
         const badge = document.getElementById('badge-calls-count');
-        badge.textContent = count;
-        badge.className = count > 0 ? 'badge-count' : 'badge-count zero';
-        document.getElementById('lbl-calls-summary').textContent = count === 1 ? '1 chamada ativa' : `${count} chamadas ativas`;
+        if (badge) {
+          badge.textContent = count;
+          badge.className = count > 0 ? 'badge-count' : 'badge-count zero';
+        }
+        const summaryEl = document.getElementById('lbl-calls-summary');
+        if (summaryEl) {
+          summaryEl.textContent = count === 1 ? '1 chamada ativa' : `${count} chamadas ativas`;
+        }
 
         renderCallCards(calls);
-      } catch (err) {}
+      } catch (err) {
+        console.error('[Dashboard] Erro ao buscar chamadas ativas:', err);
+        updateGatewayStatus(false);
+      }
     }
 
     function renderCallCards(calls) {
       const container = document.getElementById('call-cards-container');
-      if (calls.length === 0) {
+      if (!container) return;
+      if (!Array.isArray(calls) || calls.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
             <h3>Nenhuma chamada ativa no momento</h3>
@@ -1735,103 +1786,107 @@
         return;
       }
 
-      container.innerHTML = calls.map(c => {
-        let speechClass = 'listening';
-        let speechText = '🎧 Ouvindo / Silêncio';
-        if (c.isAgentTalking) {
-          speechClass = 'agent-speaking';
-          speechText = '🤖 IA Falando (TX)';
-        }
+      try {
+        container.innerHTML = calls.map(c => {
+          let speechClass = 'listening';
+          let speechText = '🎧 Ouvindo / Silêncio';
+          if (c.isAgentTalking) {
+            speechClass = 'agent-speaking';
+            speechText = '🤖 IA Falando (TX)';
+          }
 
-        const devIcon = c.deviceMode === 'viva_voz' ? '📢 Viva-Voz (AEC Ativo)' : '🎧 Fone (AEC Off)';
-        const isRec = c.recordingActive;
-        const recBadge = isRec
-          ? `<span class="tag rec-active">● Gravando Estéreo</span>`
-          : (c.recordingPaused ? `<span class="tag">⏸ Gravação Pausada</span>` : '');
+          const devIcon = c.deviceMode === 'viva_voz' ? '📢 Viva-Voz (AEC Ativo)' : '🎧 Fone (AEC Off)';
+          const isRec = c.recordingActive;
+          const recBadge = isRec
+            ? `<span class="tag rec-active">● Gravando Estéreo</span>`
+            : (c.recordingPaused ? `<span class="tag">⏸ Gravação Pausada</span>` : '');
 
-        return `
-          <div class="call-card ${c.isAgentTalking ? 'talking' : ''}" id="card-${c.callId}">
-            <div class="call-card-top">
-              <div>
-                <div class="call-id">ID: ${escapeHtml(c.callId)}</div>
-                <div class="call-parties">
-                  <span>${escapeHtml(c.caller || 'Desconhecido')}</span>
-                  <span class="arrow">➜</span>
-                  <span>${escapeHtml(c.called || '1000')}</span>
+          return `
+            <div class="call-card ${c.isAgentTalking ? 'talking' : ''}" id="card-${c.callId}">
+              <div class="call-card-top">
+                <div>
+                  <div class="call-id">ID: ${escapeHtml(c.callId)}</div>
+                  <div class="call-parties">
+                    <span>${escapeHtml(c.caller || 'Desconhecido')}</span>
+                    <span class="arrow">➜</span>
+                    <span>${escapeHtml(c.called || '1000')}</span>
+                  </div>
+                </div>
+                <div style="text-align: right;">
+                  <span class="badge-tenant">${escapeHtml(c.tenantId)}</span>
+                  <div style="font-size: 13px; font-weight: 700; color: var(--text-main); margin-top: 4px;">
+                    ⏱ ${formatDuration(c.durationSec || 0)}
+                  </div>
                 </div>
               </div>
-              <div style="text-align: right;">
-                <span class="badge-tenant">${escapeHtml(c.tenantId)}</span>
-                <div style="font-size: 13px; font-weight: 700; color: var(--text-main); margin-top: 4px;">
-                  ⏱ ${formatDuration(c.durationSec || 0)}
+
+              <!-- Speech Indicator -->
+              <div class="speech-indicator ${speechClass}">
+                <span>${speechText}</span>
+              </div>
+
+              <!-- Preview da Última Fala em Tempo Real -->
+              ${c.lastTranscript ? `
+                <div style="font-size: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 12px; color: #cbd5e1; display: flex; align-items: flex-start; gap: 8px;">
+                  <span style="font-weight: 700; color: ${c.lastTranscript.speaker === 'Cliente' ? '#34d399' : '#60a5fa'}; white-space: nowrap;">
+                    ${c.lastTranscript.speaker === 'Cliente' ? '👤 Cliente:' : '🤖 IA:'}
+                  </span>
+                  <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    ${escapeHtml(c.lastTranscript.text)}
+                  </span>
                 </div>
+              ` : ''}
+
+              <!-- Tags Acústicas e Codec -->
+              <div class="acoustic-tags">
+                <span class="tag highlight">Ruído: ${c.noiseProfile || 'SILENCE'}</span>
+                <span class="tag">${devIcon}</span>
+                <span class="tag">Codec: ${c.codec || 'g711_ulaw'}</span>
+                ${c.amdEnabled ? '<span class="tag">AMD Ativo</span>' : ''}
+                ${c.sttEnabled ? '<span class="tag">STT Ativo</span>' : ''}
+                ${c.isBargeinGraceActive ? `<span class="tag" style="background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border-color: rgba(139, 92, 246, 0.35); font-weight: 600;" title="Barge-in bloqueado temporariamente para proteger saudação inicial">⏳ Lockout Barge-in (${c.durationSec}s/${c.bargeinGraceSec || 8}s)</span>` : ''}
+                ${recBadge}
+                ${c.isMuted ? '<span class="tag" style="color: #f87171;">🔇 Mutado</span>' : ''}
+                ${c.isOnHold ? '<span class="tag" style="color: #fbbf24;">⏸ Em Espera</span>' : ''}
+                ${c.isSafetyExpiring ? '<span class="tag" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border-color: rgba(239, 68, 68, 0.4); font-weight: 700;">⏱️ Limite 3min (Encerrando)</span>' : '<span class="tag" style="color: #94a3b8;">⏱️ Limite: 3m</span>'}
+              </div>
+
+              <!-- Ações Rápidas In-Call -->
+              <div class="call-actions">
+                <button class="btn btn-primary btn-sm" onclick="openLiveDrawer('${escapeHtml(c.callId)}')">
+                  📝 Transcrição
+                </button>
+                <button class="btn btn-purple btn-sm" onclick="openSayModal('${escapeHtml(c.callId)}')">
+                  💬 Falar / Say
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="triggerInterrupt('${escapeHtml(c.callId)}')">
+                  🛑 Interromper
+                </button>
+                <button class="btn btn-sm" onclick="openDtmfModal('${escapeHtml(c.callId)}')">
+                  🔢 DTMF
+                </button>
+                <button class="btn btn-sm" onclick="toggleMute('${escapeHtml(c.callId)}', ${!c.isMuted})">
+                  ${c.isMuted ? '🔊 Unmute' : '🔇 Mute'}
+                </button>
+                <button class="btn btn-sm" onclick="toggleHold('${escapeHtml(c.callId)}', ${!c.isOnHold})">
+                  ${c.isOnHold ? '▶ Unhold' : '⏸ Hold'}
+                </button>
+                <button class="btn btn-sm" onclick="toggleRecording('${escapeHtml(c.callId)}', '${isRec ? 'pause' : 'resume'}')">
+                  ${isRec ? '⏸ Pausar Rec' : '🔴 Gravar'}
+                </button>
+                <button class="btn btn-sm" onclick="openTransferModal('${escapeHtml(c.callId)}')">
+                  🔀 Transferir
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="triggerHangup('${escapeHtml(c.callId)}')">
+                  📞❌ Desligar
+                </button>
               </div>
             </div>
-
-            <!-- Speech Indicator -->
-            <div class="speech-indicator ${speechClass}">
-              <span>${speechText}</span>
-            </div>
-
-            <!-- Preview da Última Fala em Tempo Real -->
-            ${c.lastTranscript ? `
-              <div style="font-size: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 12px; color: #cbd5e1; display: flex; align-items: flex-start; gap: 8px;">
-                <span style="font-weight: 700; color: ${c.lastTranscript.speaker === 'Cliente' ? '#34d399' : '#60a5fa'}; white-space: nowrap;">
-                  ${c.lastTranscript.speaker === 'Cliente' ? '👤 Cliente:' : '🤖 IA:'}
-                </span>
-                <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                  ${escapeHtml(c.lastTranscript.text)}
-                </span>
-              </div>
-            ` : ''}
-
-            <!-- Tags Acústicas e Codec -->
-            <div class="acoustic-tags">
-              <span class="tag highlight">Ruído: ${c.noiseProfile || 'SILENCE'}</span>
-              <span class="tag">${devIcon}</span>
-              <span class="tag">Codec: ${c.codec}</span>
-              ${c.amdEnabled ? '<span class="tag">AMD Ativo</span>' : ''}
-              ${c.sttEnabled ? '<span class="tag">STT Ativo</span>' : ''}
-              ${c.isBargeinGraceActive ? `<span class="tag" style="background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border-color: rgba(139, 92, 246, 0.35); font-weight: 600;" title="Barge-in bloqueado temporariamente para proteger saudação inicial">⏳ Lockout Barge-in (${c.durationSec}s/${c.bargeinGraceSec || 8}s)</span>` : ''}
-              ${recBadge}
-              ${c.isMuted ? '<span class="tag" style="color: #f87171;">🔇 Mutado</span>' : ''}
-              ${c.isOnHold ? '<span class="tag" style="color: #fbbf24;">⏸ Em Espera</span>' : ''}
-              ${c.isSafetyExpiring ? '<span class="tag" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border-color: rgba(239, 68, 68, 0.4); font-weight: 700;">⏱️ Limite 3min (Encerrando)</span>' : '<span class="tag" style="color: #94a3b8;">⏱️ Limite: 3m</span>'}
-            </div>
-
-            <!-- Ações Rápidas In-Call -->
-            <div class="call-actions">
-              <button class="btn btn-primary btn-sm" onclick="openLiveDrawer('${escapeHtml(c.callId)}')">
-                📝 Transcrição
-              </button>
-              <button class="btn btn-purple btn-sm" onclick="openSayModal('${escapeHtml(c.callId)}')">
-                💬 Falar / Say
-              </button>
-              <button class="btn btn-danger btn-sm" onclick="triggerInterrupt('${escapeHtml(c.callId)}')">
-                🛑 Interromper
-              </button>
-              <button class="btn btn-sm" onclick="openDtmfModal('${escapeHtml(c.callId)}')">
-                🔢 DTMF
-              </button>
-              <button class="btn btn-sm" onclick="toggleMute('${escapeHtml(c.callId)}', ${!c.isMuted})">
-                ${c.isMuted ? '🔊 Unmute' : '🔇 Mute'}
-              </button>
-              <button class="btn btn-sm" onclick="toggleHold('${escapeHtml(c.callId)}', ${!c.isOnHold})">
-                ${c.isOnHold ? '▶ Unhold' : '⏸ Hold'}
-              </button>
-              <button class="btn btn-sm" onclick="toggleRecording('${escapeHtml(c.callId)}', '${isRec ? 'pause' : 'resume'}')">
-                ${isRec ? '⏸ Pausar Rec' : '🔴 Gravar'}
-              </button>
-              <button class="btn btn-sm" onclick="openTransferModal('${escapeHtml(c.callId)}')">
-                🔀 Transferir
-              </button>
-              <button class="btn btn-danger btn-sm" onclick="triggerHangup('${escapeHtml(c.callId)}')">
-                📞❌ Desligar
-              </button>
-            </div>
-          </div>
-        `;
-      }).join('');
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('[Dashboard] Erro ao renderizar cards de chamadas:', err);
+      }
     }
 
     // -------------------------------------------------------------
@@ -1870,7 +1925,7 @@
     async function fetchDrawerTranscript(callId) {
       if (!callId) return;
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/transcript`);
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/transcript`);
         if (!res.ok) {
           if (res.status === 404) {
             const body = document.getElementById('drawer-transcript-body');
@@ -1925,7 +1980,7 @@
     // -------------------------------------------------------------
     async function triggerInterrupt(callId) {
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/interrupt`, { method: 'POST' });
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/interrupt`, { method: 'POST' });
         if (res.ok) {
           showToast('Barge-in executado: voz da IA cancelada imediatamente!', 'success');
           fetchCallsData();
@@ -1940,7 +1995,7 @@
     async function triggerHangup(callId) {
       if (!confirm('Deseja realmente desligar esta chamada?')) return;
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}`, { method: 'DELETE' });
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}`, { method: 'DELETE' });
         if (res.ok) {
           showToast('Chamada encerrada com sucesso', 'info');
           if (activeDrawerCallId === callId) closeDrawer();
@@ -1966,7 +2021,7 @@
     async function toggleMute(callId, shouldMute) {
       const action = shouldMute ? 'mute' : 'unmute';
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/${action}`, { method: 'POST' });
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/${action}`, { method: 'POST' });
         if (res.ok) {
           showToast(shouldMute ? 'Microfone mutado' : 'Microfone reativado', 'info');
           fetchCallsData();
@@ -1977,7 +2032,7 @@
     async function toggleHold(callId, shouldHold) {
       const action = shouldHold ? 'hold' : 'unhold';
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/${action}`, { method: 'POST' });
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/${action}`, { method: 'POST' });
         if (res.ok) {
           showToast(shouldHold ? 'Chamada colocada em espera' : 'Chamada retomada da espera', 'info');
           fetchCallsData();
@@ -1987,7 +2042,7 @@
 
     async function toggleRecording(callId, action) {
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/recording`, {
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/recording`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action })
@@ -2016,7 +2071,7 @@
       if (!text) return alert('Por favor, digite a mensagem a ser injetada');
 
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/say`, {
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/say`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ role, text, interrupt, triggerResponse })
@@ -2047,7 +2102,7 @@
       if (!digits) return alert('Digite os dígitos DTMF');
 
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/dtmf`, {
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/dtmf`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ digits, direction })
@@ -2073,7 +2128,7 @@
       if (!target) return alert('Digite o destino da transferência');
 
       try {
-        const res = await fetch(`/v1/calls/${encodeURIComponent(callId)}/transfer`, {
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/transfer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ target, mode })
@@ -2103,7 +2158,7 @@
       if (!to) return alert('Informe o destino da chamada');
 
       try {
-        const res = await fetch('/v1/calls', {
+        const res = await apiFetch('/v1/calls', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to, from, tenantId, amd, stt, instructions: instructions || undefined })
@@ -2127,7 +2182,7 @@
     // -------------------------------------------------------------
     async function fetchRecordingsData() {
       try {
-        const res = await fetch('/v1/recordings');
+        const res = await apiFetch('/v1/recordings');
         if (!res.ok) return;
         const data = await res.json();
         const items = data.recordings || [];
@@ -2188,7 +2243,7 @@
       openModal('modal-transcript-view');
 
       try {
-        const res = await fetch(`/v1/recordings/${encodeURIComponent(baseName)}/transcript`);
+        const res = await apiFetch(`/v1/recordings/${encodeURIComponent(baseName)}/transcript`);
         const data = await res.json();
         currentRawTranscriptText = data.formatted || '';
 
@@ -2225,7 +2280,7 @@
     async function deleteRecording(baseName) {
       if (!confirm(`Deseja excluir a gravação e transcrição de ${baseName} (Direito ao Esquecimento LGPD)?`)) return;
       try {
-        const res = await fetch(`/v1/recordings/${encodeURIComponent(baseName)}`, { method: 'DELETE' });
+        const res = await apiFetch(`/v1/recordings/${encodeURIComponent(baseName)}`, { method: 'DELETE' });
         if (res.ok) {
           showToast('Gravação removida do disco!', 'info');
           fetchRecordingsData();
@@ -2371,7 +2426,7 @@
       btn.innerHTML = 'Salvando...';
 
       try {
-        const res = await fetch('/v1/tenants', {
+        const res = await apiFetch('/v1/tenants', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -2402,7 +2457,7 @@
       }
 
       try {
-        const res = await fetch(`/v1/tenants/${encodeURIComponent(tenantId)}`, {
+        const res = await apiFetch(`/v1/tenants/${encodeURIComponent(tenantId)}`, {
           method: 'DELETE'
         });
         const data = await res.json();
@@ -2418,7 +2473,7 @@
 
     async function fetchTenantsData() {
       try {
-        const res = await fetch('/v1/tenants');
+        const res = await apiFetch('/v1/tenants');
         if (!res.ok) return;
         const data = await res.json();
         const list = data.tenants || [];
@@ -2486,7 +2541,7 @@
     // -------------------------------------------------------------
     async function fetchApiCatalog() {
       try {
-        const res = await fetch('/v1/commands');
+        const res = await apiFetch('/v1/commands');
         if (!res.ok) return;
         const data = await res.json();
         const catalog = data.commandsCatalog || [];
@@ -2520,7 +2575,7 @@
         return runFeaturesDiagnostic();
       }
       try {
-        const res = await fetch('/v1/features');
+        const res = await apiFetch('/v1/features');
         if (!res.ok) return;
         const data = await res.json();
         const features = data.features || [];
@@ -2572,7 +2627,7 @@
       }
 
       try {
-        const res = await fetch('/v1/features/test', { method: 'POST' });
+        const res = await apiFetch('/v1/features/test', { method: 'POST' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const features = data.features || [];
@@ -2644,7 +2699,7 @@
       btn.innerHTML = '🧪 Testando...';
 
       try {
-        const res = await fetch(`/v1/features/${encodeURIComponent(featureId)}/test`, { method: 'POST' });
+        const res = await apiFetch(`/v1/features/${encodeURIComponent(featureId)}/test`, { method: 'POST' });
         const data = await res.json();
         const testResult = data.test;
 
