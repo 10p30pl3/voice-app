@@ -247,7 +247,7 @@ class OpenAIS2SBridge {
       this.sipHeaders['X-Crosstalk-Ratio'] ||
       this.tenant.crosstalkRatio ||
       process.env.CROSSTALK_RATIO ||
-      0.48
+      0.45
     );
     this.crosstalkFilter = new CrosstalkFilter({
       ratio: crosstalkRatio,

@@ -7,12 +7,12 @@
  */
 class CrosstalkFilter {
   constructor({
-    ratio = 0.48,               // Vozes de fundo abaixo de ~48% do envelope de voz do usuário são bloqueadas
-    initialUserRms = 1400,      // Estimativa inicial do envelope de fala do usuário principal (Int16 PCM 8kHz)
-    minUserRms = 1100,          // Limite inferior para a referência de voz principal
-    maxUserRms = 3500,          // Limite superior para evitar que gritos/estalos deixem o filtro surdo
-    maxThresholdRms = 1250,     // Teto máximo do gate: qualquer voz sustentada >= 1250 RMS passa como usuário principal
-    minFloorRms = 650,          // Piso mínimo absoluto para rejeitar vozes de fundo antes mesmo da 1ª fala
+    ratio = 0.45,               // Vozes de fundo abaixo de ~45% do envelope de voz do usuário são bloqueadas
+    initialUserRms = 1800,      // Estimativa inicial do envelope de fala do usuário principal (Int16 PCM 8kHz)
+    minUserRms = 1200,          // Limite inferior para a referência de voz principal
+    maxUserRms = 9000,          // Limite superior para acompanhar o alcance dinâmico real do usuário (3.000 a 10.000 RMS)
+    maxThresholdRms = 4500,     // Teto máximo do gate proporcional a vozes próximas ao microfone
+    minFloorRms = 800,          // Piso mínimo absoluto para rejeitar vozes de fundo antes mesmo da 1ª fala
     attackFrames = 3,           // Exige 3 frames consecutivos (60ms) acima do limiar para abrir o gate (ignora picos isolados)
     hangoverMs = 400,           // Janela de sustentação (400ms) para não picotar sílabas suaves ou pausas curtas
     frameDurationMs = 20        // Duração de cada chunk RTP (20ms = 160 samples a 8kHz)
@@ -98,9 +98,9 @@ class CrosstalkFilter {
         // para que finais de palavras suaves não reduzam a referência de volume do usuário.
         const clampedRms = Math.min(this.maxUserRms, Math.max(this.minUserRms, rms));
         if (clampedRms > this.userVoiceRms) {
-          this.userVoiceRms = 0.25 * clampedRms + 0.75 * this.userVoiceRms;
+          this.userVoiceRms = 0.22 * clampedRms + 0.78 * this.userVoiceRms;
         } else {
-          this.userVoiceRms = 0.01 * clampedRms + 0.99 * this.userVoiceRms;
+          this.userVoiceRms = 0.015 * clampedRms + 0.985 * this.userVoiceRms;
         }
 
         return true;
