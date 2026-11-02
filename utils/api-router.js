@@ -143,7 +143,8 @@ const API_COMMANDS_CATALOG = [
       { method: 'GET', path: '/v1/recordings', description: 'Lista arquivos de gravação (.wav) e transcrição (.txt) salvos' },
       { method: 'GET', path: '/v1/recordings/:baseName/audio', description: 'Download/Stream do arquivo WAV Estéreo 8kHz (L=Cliente, R=Atendente)' },
       { method: 'GET', path: '/v1/recordings/:baseName/transcript', description: 'Retorna a transcrição dialogada com Data/Hora (JSON ou texto)' },
-      { method: 'DELETE', path: '/v1/recordings/:baseName', description: 'Exclui gravação e transcrição do disco (Direito ao Esquecimento LGPD)' }
+      { method: 'DELETE', path: '/v1/recordings/:baseName', description: 'Exclui gravação e transcrição do disco (Direito ao Esquecimento LGPD)' },
+      { method: 'POST', path: '/v1/recordings/batch-delete', description: 'Exclui múltiplas gravações e transcrições em lote (payload: { ids: ["..."] })' }
     ]
   },
   {
@@ -739,6 +740,66 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       }
 
       sendJson(res, 200, { count: items.length, recordings: items });
+      return true;
+    }
+
+    // 4.1 Exclusão em Lote de Gravações (/v1/recordings/batch-delete ou DELETE /v1/recordings)
+    if (
+      (req.method === 'POST' && (cleanPath === '/v1/recordings/batch-delete' || cleanPath === '/v1/recordings/delete')) ||
+      (req.method === 'DELETE' && cleanPath === '/v1/recordings')
+    ) {
+      const rawIds = Array.isArray(body.ids)
+        ? body.ids
+        : Array.isArray(body.recordings)
+        ? body.recordings
+        : [];
+      if (rawIds.length === 0) {
+        sendJson(res, 400, {
+          error: 'invalid_payload',
+          message: 'Nenhuma gravação informada para exclusão (esperado array "ids")'
+        });
+        return true;
+      }
+
+      const deleted = [];
+      const notFound = [];
+      const errors = [];
+
+      for (const item of rawIds) {
+        try {
+          const safeBase = path.basename(String(item)).replace(/\.(wav|txt)$/i, '');
+          const wavPath = path.join(defaultRecDir, `${safeBase}.wav`);
+          const txtPath = path.join(defaultRecDir, `${safeBase}.txt`);
+          let deletedAny = false;
+
+          if (fs.existsSync(wavPath)) {
+            await fs.promises.unlink(wavPath);
+            deletedAny = true;
+          }
+          if (fs.existsSync(txtPath)) {
+            await fs.promises.unlink(txtPath);
+            deletedAny = true;
+          }
+
+          if (deletedAny) {
+            deleted.push(safeBase);
+          } else {
+            notFound.push(safeBase);
+          }
+        } catch (err) {
+          errors.push({ id: item, error: err.message });
+        }
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        deletedCount: deleted.length,
+        deleted,
+        notFoundCount: notFound.length,
+        notFound,
+        errorCount: errors.length,
+        errors
+      });
       return true;
     }
 

@@ -439,12 +439,14 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   bridgeMedia.killAudio();
   assert.strictEqual(clearAiCalled, true, 'killAudio() deve truncar o buffer de gravação da IA no Barge-In');
 
-  // 8.1.1 Teste de Período de Graça de Barge-In (Lockout Inicial nos primeiros N segundos e Corte Físico de Microfone)
+  // 8.1.1 Teste de Período de Graça Dinâmico de Barge-In (Corte durante frase inicial do agente e abertura automática)
   const graceHarness = {
     callId: 'qa-bargein-grace',
     startedAt: new Date(Date.now() - 2000), // 2s decorridos de chamada
     bargeinGraceSec: 8,
     isMicMutedByGrace: true,
+    isGreetingInProgress: true,
+    graceCompleted: false,
     isSafetyExpiring: false,
     isAgentTalking: true,
     killed: false,
@@ -452,14 +454,16 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
       killAudio: () => { graceHarness.killed = true; }
     },
     isBargeinGraceActive() {
-      if (this.isMicMutedByGrace) return true;
+      if (this.graceCompleted) return false;
+      if (this.isGreetingInProgress || this.isMicMutedByGrace) return true;
       if (!this.startedAt || this.bargeinGraceSec <= 0) return false;
       const elapsedSec = (Date.now() - this.startedAt.getTime()) / 1000;
       return elapsedSec < this.bargeinGraceSec;
     },
     canTriggerBargeIn() {
       if (this.isSafetyExpiring) return false;
-      if (this.isMicMutedByGrace) return false;
+      if (this.graceCompleted) return true;
+      if (this.isGreetingInProgress || this.isMicMutedByGrace) return false;
       if (this.isBargeinGraceActive()) return false;
       return true;
     },
@@ -468,10 +472,16 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
       this.isAgentTalking = false;
       this.mediaBridge.killAudio();
       return true;
+    },
+    openCustomerChannel(reason) {
+      this.isGreetingInProgress = false;
+      this.isMicMutedByGrace = false;
+      this.graceCompleted = true;
     }
   };
 
-  // Dentro dos primeiros 8s (2s decorridos com microfone cortado no FreeSWITCH): deve bloquear interrupção
+  // Enquanto o agente fala a frase inicial de boas-vindas: canal cortado e interrupção bloqueada
+  assert.strictEqual(graceHarness.isGreetingInProgress, true);
   assert.strictEqual(graceHarness.isMicMutedByGrace, true);
   assert.strictEqual(graceHarness.isBargeinGraceActive(), true);
   assert.strictEqual(graceHarness.canTriggerBargeIn(), false);
@@ -480,9 +490,9 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   assert.strictEqual(graceHarness.killed, false);
   assert.strictEqual(graceHarness.isAgentTalking, true);
 
-  // Após os 8s (9s decorridos e microfone reativado): deve liberar corte de fala normalmente
-  graceHarness.startedAt = new Date(Date.now() - 9000);
-  graceHarness.isMicMutedByGrace = false;
+  // Assim que o agente termina a frase inicial (boas-vindas e pergunta como pode ajudar): canal ABERTO imediatamente!
+  graceHarness.openCustomerChannel('greeting_completed');
+  assert.strictEqual(graceHarness.isGreetingInProgress, false);
   assert.strictEqual(graceHarness.isBargeinGraceActive(), false);
   assert.strictEqual(graceHarness.canTriggerBargeIn(), true);
   const allowedResult = graceHarness.triggerBargeIn('speech_started');
@@ -789,6 +799,25 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
 
   const delTenantRes = await apiReq('DELETE', '/v1/tenants/banco-xyz');
   assert.strictEqual(delTenantRes.status, 200);
+
+  // 9.6 Exclusão em Lote de Gravações (/v1/recordings/batch-delete)
+  const targetRecDir = process.env.RECORDING_DIR || path.join(__dirname, 'recordings');
+  fs.mkdirSync(targetRecDir, { recursive: true });
+  fs.writeFileSync(path.join(targetRecDir, 'batch-test-1.wav'), 'fake-wav-1');
+  fs.writeFileSync(path.join(targetRecDir, 'batch-test-1.txt'), 'fake-txt-1');
+  fs.writeFileSync(path.join(targetRecDir, 'batch-test-2.wav'), 'fake-wav-2');
+  fs.writeFileSync(path.join(targetRecDir, 'batch-test-2.txt'), 'fake-txt-2');
+
+  const batchDelRes = await apiReq('POST', '/v1/recordings/batch-delete', {
+    ids: ['batch-test-1', 'batch-test-2']
+  });
+  assert.strictEqual(batchDelRes.status, 200);
+  assert.strictEqual(batchDelRes.body.ok, true);
+  assert.strictEqual(batchDelRes.body.deletedCount, 2);
+  assert.strictEqual(fs.existsSync(path.join(targetRecDir, 'batch-test-1.wav')), false);
+  assert.strictEqual(fs.existsSync(path.join(targetRecDir, 'batch-test-1.txt')), false);
+  assert.strictEqual(fs.existsSync(path.join(targetRecDir, 'batch-test-2.wav')), false);
+  assert.strictEqual(fs.existsSync(path.join(targetRecDir, 'batch-test-2.txt')), false);
 
   apiTestServer.close();
   try { fs.unlinkSync(tmpTenantsApiFile); } catch {}

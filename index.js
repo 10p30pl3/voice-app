@@ -232,6 +232,14 @@ class OpenAIS2SBridge {
     );
     this.isMicMutedByGrace = false;
     this.graceUnmuteTimer = null;
+    this.isGreetingInProgress = false;
+    this.greetingResponsePending = false;
+    this.greetingResponseId = null;
+    this.greetingAudioBytes = 0;
+    this.greetingPlaybackStartTime = null;
+    this.greetingFinishTimer = null;
+    this.greetingSafetyTimer = null;
+    this.graceCompleted = false;
 
     this.recorder = null;
     this.dtmfBuffer = '';
@@ -245,7 +253,6 @@ class OpenAIS2SBridge {
     this.lastTurn = null;
     this.activeAudioFormat = this.useG711 ? 'g711_ulaw' : 'pcm24k';
     this.cleanupHandler = null;
-    this.greetingResponsePending = false;
     this.graceEndLogged = false;
 
     this.handleEslEvent = this.handleEslEvent.bind(this);
@@ -257,7 +264,8 @@ class OpenAIS2SBridge {
   }
 
   isBargeinGraceActive() {
-    if (this.isMicMutedByGrace) return true;
+    if (this.graceCompleted) return false;
+    if (this.isGreetingInProgress || this.isMicMutedByGrace) return true;
     if (!this.startedAt || this.bargeinGraceSec <= 0) return false;
     const elapsedSec = (Date.now() - this.startedAt.getTime()) / 1000;
     return elapsedSec < this.bargeinGraceSec;
@@ -265,9 +273,46 @@ class OpenAIS2SBridge {
 
   canTriggerBargeIn() {
     if (this.isSafetyExpiring) return false;
-    if (this.isMicMutedByGrace) return false;
+    if (this.graceCompleted) return true;
+    if (this.isGreetingInProgress || this.isMicMutedByGrace) return false;
     if (this.isBargeinGraceActive()) return false;
     return true;
+  }
+
+  async openCustomerChannel(reason = 'greeting_completed') {
+    if (!this.isMicMutedByGrace && !this.isGreetingInProgress) return;
+    this.isGreetingInProgress = false;
+    this.isMicMutedByGrace = false;
+    this.graceCompleted = true;
+
+    if (this.greetingFinishTimer) {
+      clearTimeout(this.greetingFinishTimer);
+      this.greetingFinishTimer = null;
+    }
+    if (this.greetingSafetyTimer) {
+      clearTimeout(this.greetingSafetyTimer);
+      this.greetingSafetyTimer = null;
+    }
+    if (this.graceUnmuteTimer) {
+      clearTimeout(this.graceUnmuteTimer);
+      this.graceUnmuteTimer = null;
+    }
+
+    if (this.endpoint && this.channelUuid && !this.isTerminated) {
+      await this.endpoint.api(`uuid_audio ${this.channelUuid} stop read`).catch((err) => {
+        console.error(`[${this.callId}] 🎙️ [BARGE-IN DINÂMICO] Erro ao abrir canal no FreeSWITCH:`, err.message);
+      });
+    }
+
+    console.log(
+      `[${this.callId}] 🎙️ [BARGE-IN DINÂMICO] Saudação inicial do agente concluída (${reason}). Canal do cliente ABERTO no FreeSWITCH. Pedidos e barge-in liberados!`
+    );
+
+    if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+      try {
+        this.openaiSocket.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+      } catch {}
+    }
   }
 
   triggerBargeIn(reason = 'speech_started') {
@@ -395,9 +440,13 @@ class OpenAIS2SBridge {
       if (body.type === 'response.created' || body.type === 'response.output_item.added') {
         if (this.greetingResponsePending && body.type === 'response.created') {
           this.greetingResponsePending = false;
+          this.greetingResponseId = body.response?.id;
+          console.log(
+            `[${this.callId}] ⏳ [BARGE-IN DINÂMICO] IA gerando saudação inicial (Response ID: ${this.greetingResponseId || 'n/a'}). Canal do cliente permanece fechado.`
+          );
         } else if (this.isBargeinGraceActive() && body.type === 'response.created') {
           console.log(
-            `[${this.callId}] 🛡️ [BARGE-IN GRACE] Resposta da IA cancelada: pedido do cliente ignorado durante o período de carência.`
+            `[${this.callId}] 🛡️ [BARGE-IN DINÂMICO] Resposta da IA cancelada: pedido do cliente ignorado durante a saudação do agente.`
           );
           if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
             try {
@@ -427,6 +476,13 @@ class OpenAIS2SBridge {
           ? mulawToLinear16(rawDelta)
           : downsample24to8(rawDelta);
         this.mediaBridge.pushAudioChunk(pcm8k);
+
+        if (this.isGreetingInProgress) {
+          if (!this.greetingPlaybackStartTime) {
+            this.greetingPlaybackStartTime = Date.now();
+          }
+          this.greetingAudioBytes += pcm8k.length;
+        }
       }
 
       // 1. Transcrição do Atendente (IA) via eventos da OpenAI Realtime
@@ -467,9 +523,28 @@ class OpenAIS2SBridge {
       if (['response.output_audio.done', 'response.done'].includes(body.type)) {
         if (this.isAgentTalking) {
           this.isAgentTalking = false;
-          console.log(`[${this.callId}] 🔊 Fim da resposta da IA.`);
+          console.log(`[${this.callId}] 🔊 Fim da transmissão de áudio da IA.`);
           this.mediaBridge.endPlaybackStream();
         }
+
+        // Barge-in Dinâmico: Quando a IA termina de gerar a saudação de boas-vindas, aguarda a finalização
+        // do playout do buffer de áudio no FreeSWITCH e então abre o canal do microfone do cliente.
+        if (this.isGreetingInProgress && !this.greetingFinishTimer) {
+          const audioDurationMs = Math.round(this.greetingAudioBytes / 16);
+          const elapsedPlaybackMs = this.greetingPlaybackStartTime
+            ? Date.now() - this.greetingPlaybackStartTime
+            : 0;
+          const remainingMs = Math.max(0, audioDurationMs - elapsedPlaybackMs) + 350;
+
+          console.log(
+            `[${this.callId}] ⏳ [BARGE-IN DINÂMICO] Saudação da IA transmitida (${(audioDurationMs / 1000).toFixed(1)}s de áudio). Aguardando término da reprodução (${remainingMs}ms) para abrir o canal.`
+          );
+
+          this.greetingFinishTimer = setTimeout(async () => {
+            await this.openCustomerChannel('greeting_completed');
+          }, remainingMs);
+        }
+
         if (this.isSafetyExpiring && !this.safetyCloseTimer) {
           console.log(
             `[${this.callId}] ⏱️ Aviso de limite de segurança reproduzido pela IA. Encerrando chamada com tolerância de 1.5s.`
@@ -586,34 +661,27 @@ class OpenAIS2SBridge {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
 
-    // 0. Bloqueio Físico de Barge-in: Corta o microfone do usuário no FreeSWITCH durante o período de carência (saudação inicial)
+    // 0. Bloqueio Dinâmico de Barge-in: Corta o microfone do interlocutor no FreeSWITCH durante a frase inicial do agente
     if (this.bargeinGraceSec > 0) {
       this.isMicMutedByGrace = true;
+      this.isGreetingInProgress = true;
+      this.greetingAudioBytes = 0;
+      this.greetingPlaybackStartTime = null;
+
       this.endpoint.api(`uuid_audio ${this.channelUuid} start read mute`).catch((err) => {
-        console.error(`[${this.callId}] 🔇 [BARGE-IN GRACE] Erro ao cortar microfone no FreeSWITCH:`, err.message);
+        console.error(`[${this.callId}] 🔇 [BARGE-IN DINÂMICO] Erro ao cortar microfone no FreeSWITCH:`, err.message);
       });
       console.log(
-        `[${this.callId}] 🔇 [BARGE-IN GRACE] Microfone do cliente CORTADO no FreeSWITCH por ${this.bargeinGraceSec}s (saudação protegida).`
+        `[${this.callId}] 🔇 [BARGE-IN DINÂMICO] Canal do microfone do cliente CORTADO no FreeSWITCH durante a frase inicial do agente.`
       );
 
-      this.graceUnmuteTimer = setTimeout(async () => {
-        if (this.isMicMutedByGrace && !this.isTerminated) {
-          this.isMicMutedByGrace = false;
-          if (this.endpoint && this.channelUuid) {
-            await this.endpoint.api(`uuid_audio ${this.channelUuid} stop read`).catch((err) => {
-              console.error(`[${this.callId}] 🎙️ [BARGE-IN GRACE] Erro ao reativar microfone no FreeSWITCH:`, err.message);
-            });
-          }
-          console.log(
-            `[${this.callId}] 🎙️ [BARGE-IN GRACE] Microfone do cliente REATIVADO no FreeSWITCH (${this.bargeinGraceSec}s concluídos). Pedidos liberados.`
-          );
-          if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
-            try {
-              this.openaiSocket.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
-            } catch {}
-          }
+      // Timeout de segurança (20s) para garantir abertura do canal caso haja falha inesperada na OpenAI
+      this.greetingSafetyTimer = setTimeout(() => {
+        if (this.isGreetingInProgress && !this.isTerminated) {
+          console.warn(`[${this.callId}] ⏱️ [BARGE-IN DINÂMICO] Timeout de segurança de saudação (20s). Liberando canal do cliente.`);
+          this.openCustomerChannel('safety_timeout');
         }
-      }, this.bargeinGraceSec * 1000);
+      }, 20000);
     }
 
     this.maxDurationSec = Number(
@@ -960,7 +1028,7 @@ class OpenAIS2SBridge {
     const responseCreate = {
       type: 'response.create',
       response: {
-        instructions: 'Faça uma saudação inicial curta e amigável.'
+        instructions: 'Dê as boas-vindas cordialmente de forma curta e amigável e pergunte em que pode ajudar hoje.'
       }
     };
     this.greetingResponsePending = true;
@@ -1024,6 +1092,7 @@ class OpenAIS2SBridge {
       bargeinGraceSec: this.bargeinGraceSec,
       isBargeinGraceActive: this.isBargeinGraceActive(),
       isMicMutedByGrace: this.isMicMutedByGrace,
+      isGreetingInProgress: this.isGreetingInProgress,
       codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
       deviceMode: this.deviceMode,
       noiseProfile: this.currentProfile,
@@ -1223,6 +1292,14 @@ class OpenAIS2SBridge {
       clearTimeout(this.graceUnmuteTimer);
       this.graceUnmuteTimer = null;
     }
+    if (this.greetingFinishTimer) {
+      clearTimeout(this.greetingFinishTimer);
+      this.greetingFinishTimer = null;
+    }
+    if (this.greetingSafetyTimer) {
+      clearTimeout(this.greetingSafetyTimer);
+      this.greetingSafetyTimer = null;
+    }
 
     if (this.isTerminated) {
       if (this.cleanupHandler) {
@@ -1261,6 +1338,14 @@ class OpenAIS2SBridge {
     if (this.graceUnmuteTimer) {
       clearTimeout(this.graceUnmuteTimer);
       this.graceUnmuteTimer = null;
+    }
+    if (this.greetingFinishTimer) {
+      clearTimeout(this.greetingFinishTimer);
+      this.greetingFinishTimer = null;
+    }
+    if (this.greetingSafetyTimer) {
+      clearTimeout(this.greetingSafetyTimer);
+      this.greetingSafetyTimer = null;
     }
 
     if (this.warningDurationTimer) {

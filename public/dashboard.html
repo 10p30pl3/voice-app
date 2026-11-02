@@ -1118,9 +1118,13 @@
       <div class="calls-header">
         <div class="section-title">
           <span>Gravações Estéreo Dual-Stream & Transcrições Dialogadas</span>
+          <span style="font-size: 13px; font-weight: normal; color: var(--text-muted); margin-left: 10px;" id="lbl-rec-summary"></span>
         </div>
-        <div>
-          <button class="btn btn-sm" onclick="fetchRecordingsData()">Atualizar Lista</button>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button id="btn-batch-delete-rec" class="btn btn-sm btn-danger" style="display: none;" onclick="batchDeleteRecordings()">
+            🗑️ Excluir Selecionadas (<span id="batch-delete-rec-count">0</span>)
+          </button>
+          <button class="btn btn-sm" onclick="fetchRecordingsData()">🔄 Atualizar Lista</button>
         </div>
       </div>
 
@@ -1128,6 +1132,9 @@
         <table>
           <thead>
             <tr>
+              <th style="width: 44px; text-align: center;">
+                <input type="checkbox" id="chk-all-recordings" onchange="toggleSelectAllRecordings(this)" title="Selecionar todas as gravações" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);">
+              </th>
               <th>Data / Arquivo</th>
               <th>Tenant</th>
               <th>Tamanho</th>
@@ -1138,7 +1145,7 @@
           </thead>
           <tbody id="recordings-table-body">
             <tr>
-              <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;">
+              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
                 Carregando gravações...
               </td>
             </tr>
@@ -2180,12 +2187,96 @@
     // -------------------------------------------------------------
     // GRAVAÇÕES & TRANSCRIÇÕES TAB
     // -------------------------------------------------------------
+    let selectedRecordings = new Set();
+    let currentRecordingsList = [];
+
+    function updateRecordingsBatchUI() {
+      const btnBatch = document.getElementById('btn-batch-delete-rec');
+      const countSpan = document.getElementById('batch-delete-rec-count');
+      const chkAll = document.getElementById('chk-all-recordings');
+      const lblSummary = document.getElementById('lbl-rec-summary');
+
+      const count = selectedRecordings.size;
+      const total = currentRecordingsList.length;
+
+      if (countSpan) countSpan.textContent = count;
+      if (btnBatch) {
+        btnBatch.style.display = count > 0 ? 'inline-flex' : 'none';
+      }
+      if (chkAll) {
+        chkAll.checked = total > 0 && count === total;
+        chkAll.indeterminate = count > 0 && count < total;
+      }
+      if (lblSummary) {
+        lblSummary.textContent = count > 0
+          ? `(${count} de ${total} selecionada${count > 1 ? 's' : ''})`
+          : (total > 0 ? `(${total} gravação${total > 1 ? 'ões' : ''} em disco)` : '');
+      }
+    }
+
+    function onRecordingItemSelectChange(id, isChecked) {
+      if (isChecked) {
+        selectedRecordings.add(id);
+      } else {
+        selectedRecordings.delete(id);
+      }
+      updateRecordingsBatchUI();
+    }
+
+    function toggleSelectAllRecordings(masterCheckbox) {
+      if (masterCheckbox.checked) {
+        currentRecordingsList.forEach(r => selectedRecordings.add(r.id));
+      } else {
+        selectedRecordings.clear();
+      }
+      document.querySelectorAll('.chk-rec-item').forEach(cb => {
+        cb.checked = masterCheckbox.checked;
+      });
+      updateRecordingsBatchUI();
+    }
+
+    async function batchDeleteRecordings() {
+      const count = selectedRecordings.size;
+      if (count === 0) return;
+      if (!confirm(`Deseja realmente excluir as ${count} gravações selecionadas do disco (áudio WAV + transcrições)? Esta ação é permanente (Direito ao Esquecimento LGPD).`)) {
+        return;
+      }
+
+      try {
+        const ids = Array.from(selectedRecordings);
+        const res = await apiFetch('/v1/recordings/batch-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids })
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          showToast(`${data.deletedCount || count} gravação(ões) excluída(s) com sucesso!`, 'info');
+          selectedRecordings.clear();
+          await fetchRecordingsData();
+        } else {
+          showToast(`Erro ao excluir gravações: ${data.message || 'Falha no servidor'}`, 'danger');
+        }
+      } catch (err) {
+        showToast(`Erro na requisição: ${err.message}`, 'danger');
+      }
+    }
+
     async function fetchRecordingsData() {
       try {
         const res = await apiFetch('/v1/recordings');
         if (!res.ok) return;
         const data = await res.json();
         const items = data.recordings || [];
+        currentRecordingsList = items;
+
+        // Mantém seleções apenas para itens que ainda existem em disco
+        const existingIds = new Set(items.map(r => r.id));
+        for (const id of Array.from(selectedRecordings)) {
+          if (!existingIds.has(id)) {
+            selectedRecordings.delete(id);
+          }
+        }
 
         const countBadge = document.getElementById('badge-rec-count');
         countBadge.textContent = items.length;
@@ -2195,18 +2286,23 @@
         if (items.length === 0) {
           tbody.innerHTML = `
             <tr>
-              <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;">
+              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
                 Nenhuma gravação encontrada em disco.
               </td>
             </tr>
           `;
+          updateRecordingsBatchUI();
           return;
         }
 
         tbody.innerHTML = items.map(r => {
           const sizeKb = (r.sizeBytes / 1024).toFixed(1);
+          const isChecked = selectedRecordings.has(r.id);
           return `
             <tr>
+              <td style="text-align: center;">
+                <input type="checkbox" class="chk-rec-item" value="${escapeHtml(r.id)}" ${isChecked ? 'checked' : ''} onchange="onRecordingItemSelectChange('${escapeHtml(r.id)}', this.checked)" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);">
+              </td>
               <td>
                 <div style="font-weight: 600;">${escapeHtml(r.id)}</div>
                 <div style="font-size: 11px; color: var(--text-muted);">${r.createdAt ? new Date(r.createdAt).toLocaleString('pt-BR') : ''}</div>
@@ -2233,6 +2329,8 @@
             </tr>
           `;
         }).join('');
+
+        updateRecordingsBatchUI();
       } catch (err) {}
     }
 
@@ -2283,9 +2381,11 @@
         const res = await apiFetch(`/v1/recordings/${encodeURIComponent(baseName)}`, { method: 'DELETE' });
         if (res.ok) {
           showToast('Gravação removida do disco!', 'info');
+          selectedRecordings.delete(baseName);
           fetchRecordingsData();
         }
       } catch (e) {}
+    }
     }
 
     // -------------------------------------------------------------
