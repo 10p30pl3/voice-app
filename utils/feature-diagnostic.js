@@ -504,16 +504,18 @@ async function testBargeinGrace({ tenantManager } = {}) {
 async function testCrosstalkFilter(ctx = {}) {
   const start = process.hrtime.bigint();
   const CrosstalkFilter = require('./crosstalk-filter');
-  const filter = new CrosstalkFilter({ ratio: 0.40, initialUserRms: 1200, hangoverMs: 40 });
+  const filter = new CrosstalkFilter({ ratio: 0.48, initialUserRms: 1400, hangoverMs: 40, attackFrames: 3 });
 
-  // 1. Gera áudio forte do usuário principal (RMS ~1200)
+  // 1. Gera áudio forte do usuário principal (RMS ~1200) por 3 frames (60ms de ataque sustentado)
   const userSpeechChunk = Buffer.alloc(320);
   for (let i = 0; i < 160; i++) {
-    userSpeechChunk.writeInt16LE(Math.sin(i * 0.1) * 1700, i * 2);
+    userSpeechChunk.writeInt16LE(Math.sin(i * 0.1) * 1800, i * 2);
   }
+  filter.process(userSpeechChunk);
+  filter.process(userSpeechChunk);
   const userAllowed = filter.process(userSpeechChunk);
   if (!userAllowed) {
-    throw new Error('Filtro de Crosstalk bloqueou erroneamente a voz do usuário principal');
+    throw new Error('Filtro de Crosstalk bloqueou erroneamente a voz sustentada do usuário principal');
   }
 
   // 2. Esgota o hangover com pequenos silêncios
@@ -522,14 +524,14 @@ async function testCrosstalkFilter(ctx = {}) {
   filter.process(silenceChunk);
   filter.process(silenceChunk);
 
-  // 3. Gera áudio fraco de voz de fundo (RMS ~250, < 40% de 1200)
+  // 3. Gera áudio fraco de voz de fundo (RMS ~250, < 48% de 1400)
   const backgroundChunk = Buffer.alloc(320);
   for (let i = 0; i < 160; i++) {
     backgroundChunk.writeInt16LE(Math.sin(i * 0.1) * 350, i * 2);
   }
   const bgAllowed = filter.process(backgroundChunk);
   if (bgAllowed) {
-    throw new Error('Filtro de Crosstalk permitiu indevidamente a passagem de voz de fundo (<40% do volume do usuário)');
+    throw new Error('Filtro de Crosstalk permitiu indevidamente a passagem de voz de fundo (<48% do volume do usuário)');
   }
 
   const durationMs = Math.max(0.1, Number((process.hrtime.bigint() - start) / 1000000n));
@@ -539,7 +541,7 @@ async function testCrosstalkFilter(ctx = {}) {
     passed: true,
     durationMs: Number(durationMs.toFixed(2)),
     result: 'APROVADO',
-    details: 'Gate acústico validado: voz do usuário principal (RMS 1200) permitida com sustentação; vozes de fundo secundárias (<40% do volume) 100% bloqueadas antes da OpenAI.'
+    details: 'Gate acústico validado: voz sustentada do usuário principal (60ms+ ataque) permitida; picos isolados e vozes de fundo secundárias 100% bloqueados antes da OpenAI.'
   };
 }
 

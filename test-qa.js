@@ -73,12 +73,14 @@ async function runQaSuite() {
   assert.ok(Math.abs(restoredPcm.readInt16LE(0) - 1500) < 50, 'Quantização G.711 deve preservar sinal');
   assert.ok(Math.abs(restoredPcm.readInt16LE(2) - (-1500)) < 50);
 
-  // 1.4 CrosstalkFilter (Gate de voz de fundo a 40%)
+  // 1.4 CrosstalkFilter (Gate de voz de fundo com validação de ataque de 3 frames)
   const CrosstalkFilter = require('./utils/crosstalk-filter');
-  const xtalk = new CrosstalkFilter({ ratio: 0.40, initialUserRms: 1200, hangoverMs: 40 });
+  const xtalk = new CrosstalkFilter({ ratio: 0.48, initialUserRms: 1200, hangoverMs: 40, attackFrames: 3 });
   const strongChunk = Buffer.alloc(320);
   for (let i = 0; i < 160; i++) strongChunk.writeInt16LE(Math.sin(i * 0.1) * 1700, i * 2);
-  assert.strictEqual(xtalk.process(strongChunk), true, 'Voz do usuário principal deve passar no gate');
+  assert.strictEqual(xtalk.process(strongChunk), false, 'Pico isolado de 1 frame não deve abrir o gate');
+  assert.strictEqual(xtalk.process(strongChunk), false, 'Pico isolado de 2 frames não deve abrir o gate');
+  assert.strictEqual(xtalk.process(strongChunk), true, 'Voz sustentada (3+ frames) do usuário principal deve abrir o gate');
 
   // Esgota o hangover
   const silentChunk = Buffer.alloc(320);

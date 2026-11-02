@@ -247,11 +247,11 @@ class OpenAIS2SBridge {
       this.sipHeaders['X-Crosstalk-Ratio'] ||
       this.tenant.crosstalkRatio ||
       process.env.CROSSTALK_RATIO ||
-      0.40
+      0.48
     );
     this.crosstalkFilter = new CrosstalkFilter({
       ratio: crosstalkRatio,
-      hangoverMs: 600
+      hangoverMs: 400
     });
 
     this.recorder = null;
@@ -844,11 +844,6 @@ class OpenAIS2SBridge {
       onAudio: (buffer) => {
         if (this.isTerminated) return;
 
-        // Encaminha áudio ao Whisper para AMD e/ou STT (ignorando o tom de calibração 425Hz do Sonar)
-        if (this.whisperSession && !this.isToneProbe) {
-          this.whisperSession.pushAudio(buffer, 8000);
-        }
-
         // Gravação Stereo (Left=Cliente, Right=Atendente) guiada pelo clock de 20ms do RTP (somente quando STT/Gravação ativa)
         if (this.recorder && !this.isToneProbe) {
           this.recorder.writeUserChunk(buffer);
@@ -874,7 +869,7 @@ class OpenAIS2SBridge {
           this.whisperSession.amdMode === 'active' &&
           !this.whisperSession.decisionReceived;
 
-        // Período de Graça de Barge-in: Durante a janela inicial (ex: 8s), qualquer fala ou pedido do cliente não deve ser processado e deve ser ignorado pela IA
+        // Período de Graça de Barge-in: Durante a saudação inicial do agente, qualquer fala do cliente é bloqueada
         const isGraceActive = this.isBargeinGraceActive();
 
         if (!isGraceActive && !this.graceEndLogged && this.bargeinGraceSec > 0 && this.startedAt) {
@@ -889,11 +884,23 @@ class OpenAIS2SBridge {
           }
         }
 
-        // Filtro de Voz de Fundo (Crosstalk Gate): identifica se o áudio pertence ao usuário principal
-        // ou se é voz secundária/conversa de fundo mais baixa (<40% do volume do usuário).
-        // Quando o gate fecha (!isPrimaryVoice), enviamos silêncio digital (zeros) em vez de interromper
-        // os pacotes RTP, garantindo que o server_vad da OpenAI contabilize o silence_duration_ms e dispare speech_stopped!
-        const isPrimaryVoice = this.crosstalkFilter ? this.crosstalkFilter.process(buffer) : true;
+        // Filtro de Voz de Fundo (Crosstalk Gate): só calibra e processa quando o canal do cliente já está aberto (!isGraceActive)
+        const isPrimaryVoice =
+          !this.isToneProbe && !amdStillDeciding && !isGraceActive
+            ? (this.crosstalkFilter ? this.crosstalkFilter.process(buffer) : true)
+            : false;
+
+        const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
+
+        // Encaminha áudio ao Whisper: se o AMD ainda estiver decidindo nos primeiros ~1.5s, envia o áudio bruto;
+        // após a saudação (!isGraceActive), envia o effectiveBuffer filtrado para não transcrever vozes de fundo!
+        if (this.whisperSession && !this.isToneProbe) {
+          if (this.whisperSession.isAmdEnabled && !this.whisperSession.decisionReceived) {
+            this.whisperSession.pushAudio(buffer, 8000);
+          } else if (!isGraceActive) {
+            this.whisperSession.pushAudio(effectiveBuffer, 8000);
+          }
+        }
 
         if (
           !this.isToneProbe &&
@@ -903,7 +910,6 @@ class OpenAIS2SBridge {
           this.openaiSocket &&
           this.openaiSocket.readyState === WebSocket.OPEN
         ) {
-          const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
           const outboundAudio = this.useG711 ? linear16ToMulaw(effectiveBuffer) : upsample8to24(effectiveBuffer);
           this.openaiSocket.send(
             JSON.stringify({

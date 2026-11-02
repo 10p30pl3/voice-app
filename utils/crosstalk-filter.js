@@ -7,29 +7,32 @@
  */
 class CrosstalkFilter {
   constructor({
-    ratio = 0.40,               // Vozes de fundo são as que têm menos de 40% do volume do usuário
-    initialUserRms = 450,       // Estimativa inicial realista de voz telefônica (Int16 PCM 8kHz)
-    minUserRms = 300,           // Limite inferior para a calibração do usuário
-    maxUserRms = 1200,          // Limite superior para evitar que picos/estalos deixem o filtro surdo
-    maxThresholdRms = 350,      // Teto máximo do gate: qualquer voz >= 350 RMS sempre passa como usuário principal
-    hangoverMs = 600,           // Janela de sustentação (600ms) para não picotar pausas ou final de palavras
-    frameDurationMs = 20,       // Duração de cada chunk RTP (20ms = 160 samples a 8kHz)
-    minFloorRms = 80            // Piso mínimo absoluto de ruído ambiente
+    ratio = 0.48,               // Vozes de fundo abaixo de ~48% do envelope de voz do usuário são bloqueadas
+    initialUserRms = 1400,      // Estimativa inicial do envelope de fala do usuário principal (Int16 PCM 8kHz)
+    minUserRms = 1100,          // Limite inferior para a referência de voz principal
+    maxUserRms = 3500,          // Limite superior para evitar que gritos/estalos deixem o filtro surdo
+    maxThresholdRms = 1250,     // Teto máximo do gate: qualquer voz sustentada >= 1250 RMS passa como usuário principal
+    minFloorRms = 650,          // Piso mínimo absoluto para rejeitar vozes de fundo antes mesmo da 1ª fala
+    attackFrames = 3,           // Exige 3 frames consecutivos (60ms) acima do limiar para abrir o gate (ignora picos isolados)
+    hangoverMs = 400,           // Janela de sustentação (400ms) para não picotar sílabas suaves ou pausas curtas
+    frameDurationMs = 20        // Duração de cada chunk RTP (20ms = 160 samples a 8kHz)
   } = {}) {
     this.ratio = ratio;
     this.userVoiceRms = initialUserRms;
     this.minUserRms = minUserRms;
     this.maxUserRms = maxUserRms;
     this.maxThresholdRms = maxThresholdRms;
+    this.minFloorRms = minFloorRms;
+    this.attackFrames = Math.max(1, attackFrames);
     this.hangoverMs = hangoverMs;
     this.frameDurationMs = frameDurationMs;
     this.hangoverFrames = Math.max(1, Math.ceil(hangoverMs / frameDurationMs));
-    this.minFloorRms = minFloorRms;
 
+    this.consecutiveAbove = 0;
     this.hangoverCounter = 0;
     this.isGateOpen = false;
     this.lastRms = 0;
-    this.noiseFloor = minFloorRms;
+    this.noiseFloor = 80;
     this.speechFramesCount = 0;
     this.blockedFramesCount = 0;
     this.passedFramesCount = 0;
@@ -52,7 +55,7 @@ class CrosstalkFilter {
   }
 
   /**
-   * Retorna o limiar dinâmico atual (40% da voz do usuário, limitado entre minFloorRms e maxThresholdRms)
+   * Retorna o limiar dinâmico atual (limitado entre minFloorRms e maxThresholdRms)
    */
   getDynamicThreshold() {
     return Math.min(
@@ -63,6 +66,9 @@ class CrosstalkFilter {
 
   /**
    * Processa um chunk de áudio e determina se pertence ao usuário principal ou a voz de fundo.
+   * Utiliza rastreamento de envelope assimétrico (ataque rápido nos picos vocais do usuário e
+   * decaimento lento) + validação de sustentação (attackFrames) para impedir que vozes de fundo
+   * façam barge-in.
    * @param {Buffer} buffer - Chunk PCM16 de 20ms
    * @returns {boolean} true se deve passar para a OpenAI, false se deve ser silenciado (voz de fundo)
    */
@@ -70,31 +76,44 @@ class CrosstalkFilter {
     const rms = this.calculateRms(buffer);
     this.lastRms = rms;
 
-    // Limiar dinâmico: 40% da voz real do usuário (com teto de segurança para vozes suaves)
     const dynamicThreshold = this.getDynamicThreshold();
 
     // Atualiza ruído de fundo se o sinal for muito baixo (silêncio de linha)
-    if (rms < dynamicThreshold * 0.5 && rms > 0) {
+    if (rms < dynamicThreshold * 0.3 && rms > 0) {
       this.noiseFloor = 0.05 * rms + 0.95 * this.noiseFloor;
     }
 
     if (rms >= dynamicThreshold) {
-      // Fala do usuário principal detectada!
-      this.isGateOpen = true;
-      this.hangoverCounter = this.hangoverFrames;
-      this.speechFramesCount++;
-      this.passedFramesCount++;
+      this.consecutiveAbove++;
 
-      // Atualiza o volume real do usuário suavemente (limitando picos de microfone a maxUserRms)
-      if (rms >= this.minUserRms) {
-        const clampedRms = Math.min(rms, this.maxUserRms);
-        this.userVoiceRms = 0.08 * clampedRms + 0.92 * this.userVoiceRms;
+      // Abre o gate se já estava aberto ou se atingiu a sustentação mínima (60ms = 3 frames)
+      if (this.isGateOpen || this.consecutiveAbove >= this.attackFrames) {
+        this.isGateOpen = true;
+        this.hangoverCounter = this.hangoverFrames;
+        this.speechFramesCount++;
+        this.passedFramesCount++;
+
+        // Rastreamento assimétrico do envelope de voz do usuário principal:
+        // Sobe rápido (25%) nas sílabas fortes do usuário e desce muito devagar (1%)
+        // para que finais de palavras suaves não reduzam a referência de volume do usuário.
+        const clampedRms = Math.min(this.maxUserRms, Math.max(this.minUserRms, rms));
+        if (clampedRms > this.userVoiceRms) {
+          this.userVoiceRms = 0.25 * clampedRms + 0.75 * this.userVoiceRms;
+        } else {
+          this.userVoiceRms = 0.01 * clampedRms + 0.99 * this.userVoiceRms;
+        }
+
+        return true;
       }
 
-      return true;
+      // Ainda acumulando frames de ataque (< 60ms): mantém fechado para filtrar picos isolados de fundo
+      this.blockedFramesCount++;
+      return false;
     }
 
-    // Se estiver na janela de sustentação (hangover de 600ms), mantém o áudio aberto
+    this.consecutiveAbove = 0;
+
+    // Se estiver na janela de sustentação (hangover de 400ms), mantém o áudio aberto
     // para evitar que o final de palavras ou fonemas suaves sejam cortados
     if (this.hangoverCounter > 0) {
       this.hangoverCounter--;
