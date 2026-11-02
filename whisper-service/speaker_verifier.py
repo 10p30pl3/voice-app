@@ -20,7 +20,7 @@ MODEL_PATHS = {
 # telefonia (FRR 40-90%).
 DEFAULT_THRESHOLDS = {
     "wespeaker": 0.38,
-    "ecapa": 0.45
+    "ecapa": 0.28
 }
 
 # Se a similaridade ficar este tanto abaixo do limiar, uma única janela já basta para bloquear;

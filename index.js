@@ -610,7 +610,11 @@ class OpenAIS2SBridge {
       }
 
       if (body.type === 'input_audio_buffer.speech_started') {
-        this.triggerBargeIn('speech_started');
+        if (!this.isSecondaryVoiceBlocked) {
+          this.triggerBargeIn('speech_started');
+        } else {
+          console.log(`[${this.callId}] 🛡️ [BIOMETRIA] speech_started ignorado (voz secundária/fundo bloqueada).`);
+        }
       }
     } catch (err) {
       console.error(`[${this.callId}] Erro ao decodificar mensagem OpenAI:`, err.message);
@@ -1115,7 +1119,8 @@ class OpenAIS2SBridge {
         audio: {
           input: {
             transcription: {
-              model: 'whisper-1'
+              model: 'whisper-1',
+              language: 'pt'
             },
             turn_detection: {
               type: 'server_vad',
