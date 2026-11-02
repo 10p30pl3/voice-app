@@ -480,12 +480,13 @@ class OpenAIS2SBridge {
 
       if (body.type === 'session.updated' && body.session) {
         const outFmt = body.session.audio?.output?.format?.type;
+        const confirmedVoice = body.session.audio?.output?.voice;
         if (outFmt === 'audio/pcmu') {
           this.activeAudioFormat = 'g711_ulaw';
-          console.log(`[${this.callId}] 🟢 Formato de áudio confirmado pela OpenAI: G.711 u-law`);
+          console.log(`[${this.callId}] 🟢 Formato de áudio confirmado pela OpenAI: G.711 u-law | Voz: ${confirmedVoice || 'n/a'}`);
         } else {
           this.activeAudioFormat = 'pcm24k';
-          console.log(`[${this.callId}] ℹ️ Formato de áudio da OpenAI: ${outFmt || 'pcm24k'}`);
+          console.log(`[${this.callId}] ℹ️ Formato de áudio da OpenAI: ${outFmt || 'pcm24k'} | Voz: ${confirmedVoice || 'n/a'}`);
         }
       }
 
