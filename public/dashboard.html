@@ -893,6 +893,103 @@
       border-radius: 4px;
       color: #cbd5e1;
     }
+
+    /* Test results box inside cards */
+    .vfc-test-box {
+      margin-top: 4px;
+      padding: 9px 12px;
+      border-radius: 7px;
+      font-size: 11px;
+      line-height: 1.4;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      border: 1px solid transparent;
+    }
+    .vfc-test-box.passed {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(16, 185, 129, 0.35);
+      color: #34d399;
+    }
+    .vfc-test-box.failed {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #f87171;
+    }
+    .vfc-test-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 700;
+      font-size: 11px;
+    }
+    .vfc-test-latency {
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: var(--text-muted);
+      background: rgba(0, 0, 0, 0.25);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .vfc-test-details {
+      color: #cbd5e1;
+      font-size: 11px;
+      word-break: break-word;
+    }
+    .vfc-card-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 4px;
+    }
+    .btn-xs {
+      padding: 3px 8px;
+      font-size: 10.5px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .btn-outline {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid #334155;
+      color: #94a3b8;
+      transition: all 0.2s;
+    }
+    .btn-outline:hover {
+      background: #1e293b;
+      color: #f8fafc;
+      border-color: #64748b;
+    }
+    .vf-diag-banner {
+      margin-top: 12px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 500;
+      line-height: 1.45;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      animation: fadeIn 0.3s ease-in-out;
+    }
+    .vf-diag-banner.running {
+      background: rgba(59, 130, 246, 0.12);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      color: #93c5fd;
+    }
+    .vf-diag-banner.success {
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #6ee7b7;
+    }
+    .vf-diag-banner.warning {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
@@ -1107,10 +1204,14 @@
               <div class="vfh-desc" id="features-summary-text">Cancelamento de eco (AEC Sonar 425Hz), medição de ruído dinâmico, codec G.711 μ-law, gravação estéreo e proteção de custos.</div>
             </div>
           </div>
-          <div class="vfh-actions">
-            <button class="btn btn-sm btn-primary" onclick="fetchVoiceFeatures()">Atualizar Status</button>
+          <div class="vfh-actions" style="display: flex; gap: 8px;">
+            <button class="btn btn-sm btn-primary" id="btn-run-diag" onclick="runFeaturesDiagnostic()">🔄 Atualizar & Testar Features</button>
+            <button class="btn btn-sm" onclick="fetchVoiceFeatures(false)" title="Apenas recarrega dados sem reexecutar testes">Recarregar</button>
           </div>
         </div>
+
+        <!-- Banner Dinâmico de Diagnóstico -->
+        <div id="vf-diag-banner-container" style="display: none;"></div>
 
         <!-- Quick Status Chips Bar -->
         <div class="vf-chips-bar" id="vf-chips-bar">
@@ -2039,7 +2140,10 @@
     let cachedVoiceFeatures = [];
     let currentVfCategoryFilter = 'all';
 
-    async function fetchVoiceFeatures() {
+    async function fetchVoiceFeatures(runTest = false) {
+      if (runTest) {
+        return runFeaturesDiagnostic();
+      }
       try {
         const res = await fetch('/v1/features');
         if (!res.ok) return;
@@ -2049,12 +2153,19 @@
 
         const total = features.length;
         const active = features.filter(f => f.active).length;
+        const testedPassed = features.filter(f => f.test && f.test.passed).length;
 
         const badgeTab = document.getElementById('badge-vf-count');
-        if (badgeTab) badgeTab.textContent = `${active}/${total}`;
+        if (badgeTab) {
+          badgeTab.textContent = testedPassed > 0 ? `${testedPassed}/${total} ✅` : `${active}/${total}`;
+        }
 
         const pillHeader = document.getElementById('vf-active-pill');
-        if (pillHeader) pillHeader.textContent = `${active}/${total} Features Ativas`;
+        if (pillHeader) {
+          pillHeader.textContent = testedPassed > 0
+            ? `${active}/${total} Ativas | ${testedPassed}/${total} Testadas OK`
+            : `${active}/${total} Features Ativas`;
+        }
 
         const summaryText = document.getElementById('features-summary-text');
         if (summaryText) {
@@ -2068,6 +2179,114 @@
       }
     }
 
+    async function runFeaturesDiagnostic() {
+      const btn = document.getElementById('btn-run-diag');
+      const banner = document.getElementById('vf-diag-banner-container');
+      const oldHtml = btn ? btn.innerHTML : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '🧪 Testando Features em Tempo Real...';
+      }
+      if (banner) {
+        banner.style.display = 'block';
+        banner.innerHTML = `
+          <div class="vf-diag-banner running">
+            <span>⏳ Executando bateria de testes acústicos, DSP, codecs, Whisper e CPaaS em tempo real...</span>
+          </div>
+        `;
+      }
+
+      try {
+        const res = await fetch('/v1/features/test', { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const features = data.features || [];
+        cachedVoiceFeatures = features;
+
+        const total = features.length;
+        const active = features.filter(f => f.active).length;
+        const passed = data.passed ?? features.filter(f => f.test && f.test.passed).length;
+
+        const badgeTab = document.getElementById('badge-vf-count');
+        if (badgeTab) badgeTab.textContent = `${passed}/${total} ✅`;
+
+        const pillHeader = document.getElementById('vf-active-pill');
+        if (pillHeader) {
+          pillHeader.textContent = `${active}/${total} Ativas | ${passed}/${total} Testadas OK`;
+        }
+
+        const summaryText = document.getElementById('features-summary-text');
+        if (summaryText) {
+          summaryText.textContent = `Diagnóstico concluído em ${data.totalDurationMs}ms | ${passed} de ${total} features aprovadas nos testes de integração.`;
+        }
+
+        if (banner) {
+          if (data.ok) {
+            banner.innerHTML = `
+              <div class="vf-diag-banner success">
+                <div>
+                  <strong>🎉 Diagnóstico Concluído com Sucesso!</strong>
+                  <span> ${data.passed}/${data.total} features testadas e aprovadas em ${data.totalDurationMs}ms (${new Date(data.testedAt).toLocaleTimeString()}). Motores de voz 100% operacionais.</span>
+                </div>
+                <button class="btn btn-xs btn-outline" onclick="this.parentElement.parentElement.style.display='none'">✕</button>
+              </div>
+            `;
+          } else {
+            banner.innerHTML = `
+              <div class="vf-diag-banner warning">
+                <div>
+                  <strong>⚠️ Diagnóstico Concluído com Alertas:</strong>
+                  <span> ${data.passed}/${data.total} features aprovadas (${data.failed} falhas) em ${data.totalDurationMs}ms. Verifique os cards abaixo.</span>
+                </div>
+                <button class="btn btn-xs btn-outline" onclick="this.parentElement.parentElement.style.display='none'">✕</button>
+              </div>
+            `;
+          }
+        }
+
+        renderVoiceFeaturesChips(features);
+        renderVoiceFeaturesFullTab(features);
+      } catch (err) {
+        console.error('Erro ao executar diagnóstico de features:', err);
+        if (banner) {
+          banner.innerHTML = `
+            <div class="vf-diag-banner warning">
+              <span>❌ Erro ao conectar com o serviço de diagnóstico: ${escapeHtml(err.message)}</span>
+            </div>
+          `;
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = oldHtml || '🔄 Atualizar & Testar Features';
+        }
+      }
+    }
+
+    async function testSingleFeature(featureId, btn) {
+      const oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '🧪 Testando...';
+
+      try {
+        const res = await fetch(`/v1/features/${encodeURIComponent(featureId)}/test`, { method: 'POST' });
+        const data = await res.json();
+        const testResult = data.test;
+
+        const idx = cachedVoiceFeatures.findIndex(f => f.id === featureId);
+        if (idx !== -1) {
+          cachedVoiceFeatures[idx].test = testResult;
+        }
+
+        renderVoiceFeaturesChips(cachedVoiceFeatures);
+        renderVoiceFeaturesFullTab(cachedVoiceFeatures);
+      } catch (err) {
+        alert('Erro ao testar feature: ' + err.message);
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+      }
+    }
+
     function renderVoiceFeaturesChips(features) {
       const container = document.getElementById('vf-chips-bar');
       if (!container) return;
@@ -2075,12 +2294,16 @@
       container.innerHTML = features.map(f => {
         const activeClass = f.active ? 'active' : '';
         const dotClass = f.active ? 'chip-dot active' : 'chip-dot';
+        const testBadge = f.test
+          ? `<span style="font-size: 9.5px; padding: 1px 5px; border-radius: 4px; font-weight: 700; background: ${f.test.passed ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}; color: ${f.test.passed ? '#34d399' : '#f87171'};">${f.test.passed ? '✓' : '✗'} ${f.test.durationMs}ms</span>`
+          : '';
         return `
           <div class="vf-chip ${activeClass}" title="${escapeHtml(f.detail)}">
             <span class="${dotClass}"></span>
             <span>${f.icon}</span>
             <span class="chip-name">${escapeHtml(f.name.split(' (')[0])}</span>
             <span class="chip-status">${escapeHtml(f.badge)}</span>
+            ${testBadge}
           </div>
         `;
       }).join('');
@@ -2128,6 +2351,24 @@
         </div>
       ` : '';
 
+      const testHtml = f.test ? `
+        <div class="vfc-test-box ${f.test.passed ? 'passed' : 'failed'}">
+          <div class="vfc-test-header">
+            <span class="vfc-test-status">
+              ${f.test.passed ? '✅ TESTE APROVADO' : '❌ FALHA NO TESTE'}
+            </span>
+            <span class="vfc-test-latency">⏱️ ${f.test.durationMs}ms</span>
+          </div>
+          <div class="vfc-test-details">${escapeHtml(f.test.details)}</div>
+        </div>
+      ` : '';
+
+      const actionsHtml = isFullTab ? `
+        <div class="vfc-card-actions">
+          <button class="btn btn-xs btn-outline" onclick="testSingleFeature('${f.id}', this)" title="Executa diagnóstico isolado desta feature">⚡ Testar Feature</button>
+        </div>
+      ` : '';
+
       return `
         <div class="vf-card ${f.active ? 'active' : ''}">
           <div class="vfc-top">
@@ -2149,7 +2390,11 @@
             ${escapeHtml(f.detail)}
           </div>
 
+          ${testHtml}
+
           ${paramsHtml}
+
+          ${actionsHtml}
         </div>
       `;
     }

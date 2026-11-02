@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const { runAllFeatureDiagnostics, runFeatureDiagnostic } = require('./feature-diagnostic');
 
 /**
  * Lê e faz parse seguro do body JSON de uma requisição HTTP (com limite de 256KB)
@@ -57,6 +58,8 @@ const API_COMMANDS_CATALOG = [
       { method: 'GET', path: '/health', description: 'Healthcheck do Worker, Drachtio, FreeSWITCH Pool e Tenants' },
       { method: 'GET', path: '/v1/status', description: 'Status detalhado do cluster (FreeSWITCH + Whisper + Chamadas)' },
       { method: 'GET', path: '/v1/features', description: 'Painel e status detalhado de todas as 10 features de voz ativas no Gateway' },
+      { method: 'POST', path: '/v1/features/test', description: 'Executa bateria de testes diagnósticos das 10 features de voz e retorna resultados e latência' },
+      { method: 'POST', path: '/v1/features/:id/test', description: 'Executa teste diagnóstico de uma feature específica' },
       { method: 'GET', path: '/v1/cluster/nodes', description: 'Lista nós de mídia FreeSWITCH e nós de IA Whisper' },
       { method: 'GET', path: '/v1/commands', description: 'Catálogo interativo de todas as APIs e comandos de mercado' }
     ]
@@ -155,6 +158,7 @@ const API_COMMANDS_CATALOG = [
 function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, mediaServer, originateCallHandler }) {
   const defaultRecDir = process.env.RECORDING_DIR || path.join(__dirname, '..', 'recordings');
   const dashboardHtmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
+  let lastDiagnosticsResult = null;
 
   function getVoiceFeaturesStatus() {
     const tenant = tenantManager ? tenantManager.getDefaultTenant() : {};
@@ -415,13 +419,82 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       return true;
     }
 
-    if (req.method === 'GET' && cleanPath === '/v1/features') {
+    // Bateria de Diagnóstico em Tempo Real de Todas as Features (/v1/features/test)
+    if ((req.method === 'GET' || req.method === 'POST') && (cleanPath === '/v1/features/test' || cleanPath === '/v1/features/diagnostics')) {
+      const diag = await runAllFeatureDiagnostics({
+        tenantManager,
+        fsPool,
+        whisperPool,
+        activeBridges,
+        recordingsDir: defaultRecDir
+      });
+      lastDiagnosticsResult = diag;
       const features = getVoiceFeaturesStatus();
+      const resultMap = new Map(diag.results.map((r) => [r.id, r]));
+      const enrichedFeatures = features.map((f) => ({
+        ...f,
+        test: resultMap.get(f.id) || null
+      }));
+
+      sendJson(res, 200, {
+        ok: diag.ok,
+        total: diag.total,
+        passed: diag.passed,
+        failed: diag.failed,
+        totalDurationMs: diag.totalDurationMs,
+        testedAt: diag.testedAt,
+        features: enrichedFeatures,
+        results: diag.results
+      });
+      return true;
+    }
+
+    // Diagnóstico de uma feature específica (/v1/features/:id/test)
+    const singleFeatureTestMatch = cleanPath.match(/^\/v1\/features\/([a-zA-Z0-9_-]+)\/test$/);
+    if ((req.method === 'GET' || req.method === 'POST') && singleFeatureTestMatch) {
+      const featureId = singleFeatureTestMatch[1];
+      const result = await runFeatureDiagnostic(featureId, {
+        tenantManager,
+        fsPool,
+        whisperPool,
+        activeBridges,
+        recordingsDir: defaultRecDir
+      });
+      sendJson(res, result.passed ? 200 : 500, {
+        ok: result.passed,
+        featureId,
+        test: result
+      });
+      return true;
+    }
+
+    if (req.method === 'GET' && cleanPath === '/v1/features') {
+      const shouldRunTest = parsedUrl.searchParams.get('test') === 'true';
+      if (shouldRunTest) {
+        const diag = await runAllFeatureDiagnostics({
+          tenantManager,
+          fsPool,
+          whisperPool,
+          activeBridges,
+          recordingsDir: defaultRecDir
+        });
+        lastDiagnosticsResult = diag;
+      }
+
+      const features = getVoiceFeaturesStatus();
+      const resultMap = lastDiagnosticsResult ? new Map(lastDiagnosticsResult.results.map((r) => [r.id, r])) : null;
+      const enrichedFeatures = features.map((f) => ({
+        ...f,
+        test: resultMap ? (resultMap.get(f.id) || null) : null
+      }));
+
       sendJson(res, 200, {
         ok: true,
-        count: features.length,
-        activeCount: features.filter((f) => f.active).length,
-        features
+        count: enrichedFeatures.length,
+        activeCount: enrichedFeatures.filter((f) => f.active).length,
+        testedAt: lastDiagnosticsResult?.testedAt || null,
+        totalDurationMs: lastDiagnosticsResult?.totalDurationMs || null,
+        features: enrichedFeatures
       });
       return true;
     }

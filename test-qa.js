@@ -639,6 +639,23 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   assert.strictEqual(featRes.body.count, 10);
   assert.ok(featRes.body.activeCount >= 7);
 
+  // 9.1.1 Diagnóstico das 10 Features de Voz (/v1/features/test)
+  const diagRes = await apiReq('POST', '/v1/features/test');
+  assert.strictEqual(diagRes.status, 200);
+  assert.strictEqual(diagRes.body.ok, true);
+  assert.strictEqual(diagRes.body.total, 10);
+  assert.strictEqual(diagRes.body.passed, 10);
+  assert.strictEqual(diagRes.body.failed, 0);
+  assert.ok(diagRes.body.totalDurationMs < 1000);
+  assert.strictEqual(diagRes.body.features.length, 10);
+  assert.strictEqual(diagRes.body.features[0].test.passed, true);
+
+  // 9.1.2 Teste de feature individual (/v1/features/codec/test)
+  const singleTestRes = await apiReq('POST', '/v1/features/codec/test');
+  assert.strictEqual(singleTestRes.status, 200);
+  assert.strictEqual(singleTestRes.body.ok, true);
+  assert.strictEqual(singleTestRes.body.test.passed, true);
+
   const nodesRes = await apiReq('GET', '/v1/cluster/nodes');
   assert.strictEqual(nodesRes.status, 200);
   assert.ok(nodesRes.body.freeSwitch && nodesRes.body.whisper);

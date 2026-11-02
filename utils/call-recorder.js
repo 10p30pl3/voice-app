@@ -26,10 +26,11 @@ function formatDateTime(date = new Date()) {
  * - Zero bloqueio do Event Loop (usa fs.WriteStream + libuv threadpool) e 100% Fail-Open
  */
 class CallRecorder {
-  constructor({ callId, tenantId = 'default', recordingDir = null, sampleRate = 8000 }) {
+  constructor({ callId, tenantId = 'default', recordingDir = null, sampleRate = 8000, silent = false }) {
     this.callId = callId || 'unknown';
     this.tenantId = tenantId || 'default';
     this.sampleRate = sampleRate;
+    this.silent = silent;
     this.numChannels = 2; // Estéreo: L=Cliente, R=Atendente
     this.bitsPerSample = 16;
 
@@ -118,7 +119,9 @@ class CallRecorder {
         }
       }
 
-      console.log(`[${this.callId}] 🎙️ Gravação Estéreo + Transcrição iniciadas: ${this.filePath}`);
+      if (!this.silent) {
+        console.log(`[${this.callId}] 🎙️ Gravação Estéreo + Transcrição iniciadas: ${this.filePath}`);
+      }
     } catch (err) {
       console.warn(`[${this.callId}] [CallRecorder] ⚠️ Não foi possível iniciar gravação (Fail-Open):`, err.message);
       this.failed = true;
@@ -148,7 +151,9 @@ class CallRecorder {
     };
 
     this.transcriptEntries.push(entry);
-    console.log(`[${this.callId}] 📝 ${formatted}`);
+    if (!this.silent) {
+      console.log(`[${this.callId}] 📝 ${formatted}`);
+    }
 
     if (this.isStarted && this.transcriptStream && !this.transcriptStream.writableEnded) {
       try {
@@ -291,9 +296,11 @@ class CallRecorder {
         } finally {
           await fh.close();
         }
-        console.log(
-          `[${this.callId}] 💾 Gravação Estéreo (${(this.dataBytesWritten / 1024).toFixed(1)} KB) e Transcrição (${this.transcriptEntries.length} turnos) salvas em: ${this.recordingDir}`
-        );
+        if (!this.silent) {
+          console.log(
+            `[${this.callId}] 💾 Gravação Estéreo (${(this.dataBytesWritten / 1024).toFixed(1)} KB) e Transcrição (${this.transcriptEntries.length} turnos) salvas em: ${this.recordingDir}`
+          );
+        }
       }
     } catch (err) {
       console.warn(`[${this.callId}] [CallRecorder] ⚠️ Erro ao finalizar cabeçalho WAV:`, err.message);
