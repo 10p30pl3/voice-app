@@ -733,29 +733,39 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   const statusRes = await apiReq('GET', '/v1/status');
   assert.strictEqual(statusRes.status, 200);
   assert.ok(statusRes.body.whisperCluster && typeof statusRes.body.whisperCluster.totalNodes === 'number');
-  assert.ok(Array.isArray(statusRes.body.voiceFeatures) && statusRes.body.voiceFeatures.length === 12);
+  assert.ok(Array.isArray(statusRes.body.voiceFeatures) && statusRes.body.voiceFeatures.length === 14);
 
   const featRes = await apiReq('GET', '/v1/features');
   assert.strictEqual(featRes.status, 200);
-  assert.strictEqual(featRes.body.count, 12);
+  assert.strictEqual(featRes.body.count, 14);
   assert.ok(featRes.body.activeCount >= 9);
 
-  // 9.1.1 Diagnóstico das 12 Features de Voz (/v1/features/test)
+  // 9.1.1 Diagnóstico das 14 Features de Voz (/v1/features/test)
   const diagRes = await apiReq('POST', '/v1/features/test');
   assert.strictEqual(diagRes.status, 200);
   assert.strictEqual(diagRes.body.ok, true);
-  assert.strictEqual(diagRes.body.total, 12);
-  assert.strictEqual(diagRes.body.passed, 12);
+  assert.strictEqual(diagRes.body.total, 14);
+  assert.strictEqual(diagRes.body.passed, 14);
   assert.strictEqual(diagRes.body.failed, 0);
   assert.ok(diagRes.body.totalDurationMs < 1000);
-  assert.strictEqual(diagRes.body.features.length, 12);
+  assert.strictEqual(diagRes.body.features.length, 14);
   assert.strictEqual(diagRes.body.features[0].test.passed, true);
 
-  // 9.1.2 Teste de feature individual (/v1/features/crosstalk_filter/test e /v1/features/bargein_grace/test)
+  // 9.1.2 Teste de feature individual (/v1/features/crosstalk_filter/test, wespeaker e ecapa)
   const xtalkTestRes = await apiReq('POST', '/v1/features/crosstalk_filter/test');
   assert.strictEqual(xtalkTestRes.status, 200);
   assert.strictEqual(xtalkTestRes.body.ok, true);
   assert.strictEqual(xtalkTestRes.body.test.passed, true);
+
+  const wespeakerTestRes = await apiReq('POST', '/v1/features/wespeaker/test');
+  assert.strictEqual(wespeakerTestRes.status, 200);
+  assert.strictEqual(wespeakerTestRes.body.ok, true);
+  assert.strictEqual(wespeakerTestRes.body.test.passed, true);
+
+  const ecapaTestRes = await apiReq('POST', '/v1/features/ecapa/test');
+  assert.strictEqual(ecapaTestRes.status, 200);
+  assert.strictEqual(ecapaTestRes.body.ok, true);
+  assert.strictEqual(ecapaTestRes.body.test.passed, true);
 
   const graceTestRes = await apiReq('POST', '/v1/features/bargein_grace/test');
   assert.strictEqual(graceTestRes.status, 200);

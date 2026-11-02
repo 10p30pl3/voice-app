@@ -242,18 +242,45 @@ class OpenAIS2SBridge {
     this.greetingSafetyTimer = null;
     this.graceCompleted = false;
 
+    // Configuração dos 3 Modos de Filtro de Voz de Fundo:
+    // 1. 'atual' (ou 'dsp'): Filtro Acústico (YIN CMNDF pitch + proximidade spectral + RMS)
+    // 2. 'wespeaker': Biometria Neural CAM++ (ONNX 512-dim)
+    // 3. 'ecapa': Biometria Neural ECAPA-TDNN (ONNX 512-dim)
+    // 4. 'none': Filtro desligado
+    const rawFilterMode = String(
+      this.sipHeaders['x-crosstalk-mode'] ||
+      this.sipHeaders['X-Crosstalk-Mode'] ||
+      (this.tenant.crosstalkFilter && this.tenant.crosstalkFilter.mode) ||
+      this.tenant.crosstalkMode ||
+      process.env.CROSSTALK_FILTER_MODE ||
+      'atual'
+    ).toLowerCase();
+
+    this.crosstalkMode = ['atual', 'dsp', 'wespeaker', 'ecapa', 'none'].includes(rawFilterMode)
+      ? rawFilterMode
+      : 'atual';
+
+    this.isDspFilterActive = this.crosstalkMode === 'atual' || this.crosstalkMode === 'dsp';
+    this.isNeuralFilterActive = this.crosstalkMode === 'wespeaker' || this.crosstalkMode === 'ecapa';
+
     const crosstalkRatio = Number(
       this.sipHeaders['x-crosstalk-ratio'] ||
       this.sipHeaders['X-Crosstalk-Ratio'] ||
+      (this.tenant.crosstalkFilter && this.tenant.crosstalkFilter.ratio) ||
       this.tenant.crosstalkRatio ||
       process.env.CROSSTALK_RATIO ||
       0.45
     );
-    this.crosstalkFilter = new CrosstalkFilter({
-      ratio: crosstalkRatio,
-      hangoverMs: 400
-    });
+
+    this.crosstalkFilter = this.isDspFilterActive
+      ? new CrosstalkFilter({ ratio: crosstalkRatio, hangoverMs: 400 })
+      : null;
     this.crosstalkEnrolledLogged = false;
+
+    // Estado da Biometria Neural ('wespeaker' / 'ecapa')
+    this.isSecondaryVoiceBlocked = false;
+    this.lastSpeakerScore = 1.0;
+    this.agentPlaybackStartTime = null;
 
     this.recorder = null;
     this.isResponseCancelled = false;
@@ -288,9 +315,12 @@ class OpenAIS2SBridge {
 
   canTriggerBargeIn() {
     if (this.isSafetyExpiring) return false;
-    if (this.graceCompleted) return true;
     if (this.isGreetingInProgress || this.isMicMutedByGrace) return false;
     if (this.isBargeinGraceActive()) return false;
+    // Carência mínima de 250ms após o início do áudio do agente para evitar falso corte pelo eco/cauda do usuário
+    if (this.agentPlaybackStartTime && Date.now() - this.agentPlaybackStartTime < 250) {
+      return false;
+    }
     return true;
   }
 
@@ -346,6 +376,7 @@ class OpenAIS2SBridge {
 
     console.log(`[${this.callId}] 🎤 BARGE-IN: Interrompendo agente imediatamente (${reason})...`);
     this.isAgentTalking = false;
+    this.agentPlaybackStartTime = null;
     this.isResponseCancelled = true;
     this.mediaBridge.killAudio();
     if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
@@ -473,14 +504,10 @@ class OpenAIS2SBridge {
           }
           return;
         }
-
-        if (!this.isAgentTalking) {
-          this.isAgentTalking = true;
-          this.mediaBridge.startPlaybackStream();
-        }
       } else if (body.type === 'response.cancelled') {
         this.isResponseCancelled = false;
         this.isAgentTalking = false;
+        this.agentPlaybackStartTime = null;
         this.mediaBridge.killAudio();
       }
 
@@ -490,6 +517,7 @@ class OpenAIS2SBridge {
         }
         if (!this.isAgentTalking) {
           this.isAgentTalking = true;
+          this.agentPlaybackStartTime = Date.now();
           this.mediaBridge.startPlaybackStream();
         }
         const rawDelta = Buffer.from(body.delta, 'base64');
@@ -796,6 +824,24 @@ class OpenAIS2SBridge {
         }
       });
 
+      this.whisperSession.on('speaker_enrolled', (evt) => {
+        console.log(
+          `[${this.callId}] 👤 [BIOMETRIA NEURAL ${evt.model.toUpperCase()}] Assinatura vocal do titular cadastrada (${evt.duration_s || 0}s). Vozes divergentes serão bloqueadas.`
+        );
+      });
+
+      this.whisperSession.on('speaker_verification', (evt) => {
+        this.lastSpeakerScore = evt.similarity;
+        if (!evt.is_match) {
+          this.isSecondaryVoiceBlocked = true;
+          console.log(
+            `[${this.callId}] 🛡️ [BIOMETRIA ${evt.model.toUpperCase()}] Voz de fundo/terceiro BLOQUEADA: similaridade ${evt.similarity} < limiar ${evt.threshold}. Áudio e barge-in barrados.`
+          );
+        } else {
+          this.isSecondaryVoiceBlocked = false;
+        }
+      });
+
       this.whisperSession.start();
     }
 
@@ -892,31 +938,47 @@ class OpenAIS2SBridge {
           }
         }
 
-        // Filtro de Voz de Fundo (Crosstalk Gate): só calibra e processa quando o canal do cliente já está aberto (!isGraceActive)
-        const isPrimaryVoice =
-          !this.isToneProbe && !amdStillDeciding && !isGraceActive
-            ? (this.crosstalkFilter ? this.crosstalkFilter.process(buffer) : true)
+        // Filtros de Voz de Fundo Selecionáveis: 'atual' (DSP), 'wespeaker' (CAM++) ou 'ecapa' (ECAPA-TDNN)
+        // 1. Filtro DSP ('atual'):
+        let isPrimaryVoiceDsp = true;
+        if (this.isDspFilterActive && this.crosstalkFilter) {
+          isPrimaryVoiceDsp = !this.isToneProbe && !amdStillDeciding && !isGraceActive
+            ? this.crosstalkFilter.process(buffer)
             : false;
+        } else if (isGraceActive || this.isToneProbe || amdStillDeciding) {
+          isPrimaryVoiceDsp = false;
+        }
+
+        // 2. Filtro Neural ('wespeaker' / 'ecapa'):
+        let isPrimaryVoiceNeural = true;
+        if (this.isNeuralFilterActive && this.isSecondaryVoiceBlocked) {
+          isPrimaryVoiceNeural = false;
+        }
+
+        const isPrimaryVoice = isPrimaryVoiceDsp && isPrimaryVoiceNeural;
 
         if (this.crosstalkFilter && this.crosstalkFilter.enrolled && !this.crosstalkEnrolledLogged) {
           this.crosstalkEnrolledLogged = true;
           console.log(
-            `[${this.callId}] 👤 [BIOMETRIA VOCAL] Assinatura do titular capturada: F0 = ${Math.round(this.crosstalkFilter.ownerPitchHz)}Hz | Graves = ${this.crosstalkFilter.ownerLowRatio.toFixed(2)} | RMS = ${Math.round(this.crosstalkFilter.userVoiceRms)}. Vozes divergentes serão bloqueadas.`
+            `[${this.callId}] 👤 [BIOMETRIA VOCAL DSP] Assinatura do titular capturada: F0 = ${Math.round(this.crosstalkFilter.ownerPitchHz)}Hz | Graves = ${this.crosstalkFilter.ownerLowRatio.toFixed(2)} | RMS = ${Math.round(this.crosstalkFilter.userVoiceRms)}. Vozes divergentes serão bloqueadas.`
           );
         }
 
         const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
 
-        // Barge-in Instantâneo (<20ms): se a voz do titular for detectada enquanto o agente estiver falando,
-        // interrompe imediatamente o áudio local no FreeSWITCH, sem esperar o roundtrip de rede da OpenAI!
-        if (isPrimaryVoice && this.isAgentTalking && this.canTriggerBargeIn()) {
-          this.triggerBargeIn('local_biometric_vad');
+        // Barge-in Instantâneo (<20ms): só interrompe se for fala ativa legítima (não cauda/hangover silencioso)
+        const isActivelySpeaking = this.crosstalkFilter ? this.crosstalkFilter.isActivelySpeaking() : true;
+        if (isPrimaryVoice && isActivelySpeaking && this.isAgentTalking && this.canTriggerBargeIn()) {
+          this.triggerBargeIn(this.isNeuralFilterActive ? `biometric_${this.crosstalkMode}` : 'local_biometric_vad');
         }
 
-        // Encaminha áudio ao Whisper: se o AMD ainda estiver decidindo nos primeiros ~1.5s, envia o áudio bruto;
-        // após a saudação (!isGraceActive), envia o effectiveBuffer filtrado para não transcrever vozes de fundo!
+        // Encaminha áudio ao Whisper / Verifier:
+        // Se a biometria neural estiver ativa, envia o áudio bruto para o modelo poder avaliar a voz;
+        // caso contrário, envia o effectiveBuffer para o Whisper não transcrever ruídos de fundo.
         if (this.whisperSession && !this.isToneProbe) {
           if (this.whisperSession.isAmdEnabled && !this.whisperSession.decisionReceived) {
+            this.whisperSession.pushAudio(buffer, 8000);
+          } else if (this.isNeuralFilterActive) {
             this.whisperSession.pushAudio(buffer, 8000);
           } else if (!isGraceActive) {
             this.whisperSession.pushAudio(effectiveBuffer, 8000);
@@ -1140,7 +1202,14 @@ class OpenAIS2SBridge {
       isBargeinGraceActive: this.isBargeinGraceActive(),
       isMicMutedByGrace: this.isMicMutedByGrace,
       isGreetingInProgress: this.isGreetingInProgress,
-      crosstalkFilter: this.crosstalkFilter ? this.crosstalkFilter.getMetrics() : null,
+      crosstalkFilter: {
+        mode: this.crosstalkMode,
+        isDspActive: this.isDspFilterActive,
+        isNeuralActive: this.isNeuralFilterActive,
+        lastSpeakerScore: this.lastSpeakerScore,
+        isSecondaryVoiceBlocked: this.isSecondaryVoiceBlocked,
+        dspMetrics: this.crosstalkFilter ? this.crosstalkFilter.getMetrics() : null
+      },
       codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
       deviceMode: this.deviceMode,
       noiseProfile: this.currentProfile,

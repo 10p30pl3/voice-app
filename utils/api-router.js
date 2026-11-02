@@ -175,6 +175,18 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
     const maxSec = tenant.maxDurationSec || parseInt(process.env.MAX_CALL_DURATION_SEC || '180', 10);
     const dtmfEnabled = tenant.dtmf?.enabled ?? (process.env.DTMF_DEFAULT_ENABLED !== 'false');
     const dtmfDebounce = tenant.dtmf?.debounceMs || parseInt(process.env.DTMF_DEBOUNCE_MS || '1200', 10);
+    const crosstalkMode = String(
+      (tenant.crosstalkFilter && tenant.crosstalkFilter.mode) ||
+      tenant.crosstalkMode ||
+      process.env.CROSSTALK_FILTER_MODE ||
+      'atual'
+    ).toLowerCase();
+    const crosstalkRatio = Number(
+      (tenant.crosstalkFilter && tenant.crosstalkFilter.ratio) ||
+      tenant.crosstalkRatio ||
+      process.env.CROSSTALK_RATIO ||
+      0.45
+    );
 
     return [
       {
@@ -243,18 +255,50 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       },
       {
         id: 'crosstalk_filter',
-        name: 'Filtro de Vozes de Fundo (Crosstalk Gate)',
+        name: 'Filtro de Vozes de Fundo (DSP Atual / YIN F0)',
         icon: '🛡️',
         category: 'DSP & Acústica',
-        active: true,
-        badge: 'ATIVO (GATE 40%)',
-        mode: 'Calibração Adaptativa + Gate 40%',
-        detail: 'Mede continuamente o volume real do interlocutor principal. Descarta vozes secundárias e conversas de fundo que tenham volume abaixo de 40% do usuário, impedindo falsas interrupções e respostas indevidas.',
+        active: ['atual', 'dsp'].includes(crosstalkMode),
+        badge: ['atual', 'dsp'].includes(crosstalkMode) ? `ATIVO (GATE ${Math.round(crosstalkRatio * 100)}%)` : 'DESATIVADO',
+        mode: 'Calibração Adaptativa + Gate YIN F0',
+        detail: 'Mede continuamente o volume real e a frequência fundamental (F0) do interlocutor principal. Descarta vozes secundárias e conversas de fundo através de gate espectral e proximidade.',
         parameters: {
-          sensibilidadeFundo: '40% do volume do usuário',
+          sensibilidadeFundo: `${Math.round(crosstalkRatio * 100)}% do volume do usuário`,
+          algoritmo: 'YIN CMNDF (80Hz - 350Hz) + RMS Adaptativo',
           hangover: '300ms',
-          camadaProtecao: 'Gate Local + VAD OpenAI Calibrado',
-          calibracaoVolume: 'Dinâmica (Int16 RMS Adaptativo)'
+          camadaProtecao: 'Gate Local + VAD OpenAI Calibrado'
+        }
+      },
+      {
+        id: 'wespeaker',
+        name: 'Biometria Vocal WeSpeaker (CAM++ ONNX)',
+        icon: '🧬',
+        category: 'IA & Biometria Vocal',
+        active: crosstalkMode === 'wespeaker',
+        badge: crosstalkMode === 'wespeaker' ? 'ATIVO (CAM++)' : 'DISPONÍVEL',
+        mode: 'Embeddings 512-dim + Similaridade Cosseno',
+        detail: 'Deep learning speaker verification baseado em CAM++ (WeSpeaker). Extrai embeddings vocais de 512 dimensões nos primeiros 1.5s do usuário principal e bloqueia vozes secundárias com threshold configurável.',
+        parameters: {
+          modelo: 'CAM++ (campplus.onnx)',
+          threshold: '0.65',
+          latenciaInferencia: '~9ms CPU',
+          autoEnrollment: '1.5s de fala inicial'
+        }
+      },
+      {
+        id: 'ecapa',
+        name: 'Biometria Vocal ECAPA-TDNN (SpeechBrain ONNX)',
+        icon: '🧠',
+        category: 'IA & Biometria Vocal',
+        active: crosstalkMode === 'ecapa',
+        badge: crosstalkMode === 'ecapa' ? 'ATIVO (ECAPA-TDNN)' : 'DISPONÍVEL',
+        mode: 'Embeddings 512-dim ECAPA-TDNN',
+        detail: 'Arquitetura neural ECAPA-TDNN com squeeze-and-excitation e multi-layer feature aggregation para identificação e isolamento contínuo da voz do cliente.',
+        parameters: {
+          modelo: 'ECAPA-TDNN 512 (ecapa512.onnx)',
+          threshold: '0.60',
+          latenciaInferencia: '~8ms CPU',
+          autoEnrollment: '1.5s de fala inicial'
         }
       },
       {

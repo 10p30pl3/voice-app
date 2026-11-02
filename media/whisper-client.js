@@ -111,6 +111,7 @@ class WhisperSession extends EventEmitter {
 
     const sipAmdHeader = sipHeaders['x-amd-enabled'] || sipHeaders['X-AMD-Enabled'];
     const sipSttHeader = sipHeaders['x-stt-enabled'] || sipHeaders['X-STT-Enabled'];
+    const sipSpkHeader = sipHeaders['x-crosstalk-mode'] || sipHeaders['X-Crosstalk-Mode'];
 
     this.isAmdEnabled =
       sipAmdHeader !== undefined
@@ -121,6 +122,12 @@ class WhisperSession extends EventEmitter {
       sipSttHeader !== undefined
         ? sipSttHeader === 'true' || sipSttHeader === true
         : !!(tenant.stt && tenant.stt.enabled);
+
+    // Suporte aos filtros opcionais de biometria vocal neural: 'wespeaker' e 'ecapa'
+    const spkMode = (sipSpkHeader || (tenant.crosstalkFilter && tenant.crosstalkFilter.mode) || tenant.crosstalkMode || process.env.CROSSTALK_FILTER_MODE || 'none').toLowerCase();
+    this.spkFilter = (spkMode === 'wespeaker' || spkMode === 'ecapa') ? spkMode : 'none';
+    this.spkThreshold = Number((tenant.crosstalkFilter && tenant.crosstalkFilter.threshold) || tenant.crosstalkThreshold || process.env.CROSSTALK_THRESHOLD || 0.55);
+    this.isSpkFilterEnabled = this.spkFilter !== 'none';
 
     this.amdMode = (tenant.amd && tenant.amd.mode) || 'active';
     this.ws = null;
@@ -141,7 +148,7 @@ class WhisperSession extends EventEmitter {
   }
 
   isActive() {
-    return this.isAmdEnabled || this.isSttEnabled;
+    return this.isAmdEnabled || this.isSttEnabled || this.isSpkFilterEnabled;
   }
 
   resolveDecisionOnce(decisionObj) {
@@ -201,6 +208,8 @@ class WhisperSession extends EventEmitter {
     urlObj.searchParams.set('amd', this.isAmdEnabled ? 'true' : 'false');
     urlObj.searchParams.set('stt', this.isSttEnabled ? 'true' : 'false');
     urlObj.searchParams.set('mode', this.amdMode);
+    urlObj.searchParams.set('spk_filter', this.spkFilter || 'none');
+    urlObj.searchParams.set('spk_threshold', String(this.spkThreshold || 0.55));
 
     if (this.isAmdEnabled) {
       this.circuitBreakerTimer = setTimeout(() => {
@@ -211,7 +220,7 @@ class WhisperSession extends EventEmitter {
             confidence: 0.5,
             reason: 'circuit_breaker_timeout'
           });
-          if (!this.isSttEnabled) {
+          if (!this.isSttEnabled && !this.isSpkFilterEnabled) {
             this.stop();
           }
         }
@@ -223,7 +232,7 @@ class WhisperSession extends EventEmitter {
 
       this.ws.on('open', () => {
         console.log(
-          `[${this.callId}] 🧠 Conectado ao nó [${this.node.id}] (${this.node.url}) | AMD: ${this.isAmdEnabled} | STT: ${this.isSttEnabled}`
+          `[${this.callId}] 🧠 Conectado ao nó [${this.node.id}] (${this.node.url}) | AMD: ${this.isAmdEnabled} | STT: ${this.isSttEnabled} | Biometria: ${this.spkFilter.toUpperCase()}`
         );
         // Despeja imediatamente os pacotes iniciais capturados durante o handshake do WS
         if (this.pendingChunks.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -247,13 +256,21 @@ class WhisperSession extends EventEmitter {
 
             this.resolveDecisionOnce(msg);
 
-            if (!this.isSttEnabled) {
+            if (!this.isSttEnabled && !this.isSpkFilterEnabled) {
               this.stop();
             }
           }
 
           if (msg.type === 'transcript') {
             this.emit('transcript', msg);
+          }
+
+          if (msg.type === 'speaker_enrolled') {
+            this.emit('speaker_enrolled', msg);
+          }
+
+          if (msg.type === 'speaker_verification') {
+            this.emit('speaker_verification', msg);
           }
         } catch (err) {
           console.error(`[${this.callId}] [WhisperSession] Erro ao decodificar JSON do Whisper:`, err.message);
@@ -290,7 +307,7 @@ class WhisperSession extends EventEmitter {
 
   pushAudio(audioBuffer, inputRate = 8000) {
     if (this.closed || !this.ws) return;
-    if (this.decisionReceived && !this.isSttEnabled) return;
+    if (this.decisionReceived && !this.isSttEnabled && !this.isSpkFilterEnabled) return;
 
     try {
       const pcm16k = inputRate === 8000 ? upsample8to16(audioBuffer) : audioBuffer;

@@ -250,6 +250,14 @@ class CrosstalkFilter {
   }
 
   /**
+   * Indica se o locutor está falando ativamente no frame atual (energia acima do limiar)
+   * e não apenas na cauda de sustentação passiva (hangover).
+   */
+  isActivelySpeaking() {
+    return this.isGateOpen && this.consecutiveAbove > 0;
+  }
+
+  /**
    * Retorna métricas do filtro para telemetria e dashboard
    */
   getMetrics() {
