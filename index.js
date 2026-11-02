@@ -228,7 +228,7 @@ class OpenAIS2SBridge {
     this.bargeinGraceSec = Number(
       sipBargeinGrace !== undefined
         ? sipBargeinGrace
-        : this.tenant.bargeinGraceSec ?? process.env.BARGEIN_GRACE_SEC ?? 5
+        : this.tenant.bargeinGraceSec ?? process.env.BARGEIN_GRACE_SEC ?? 8
     );
 
     this.recorder = null;

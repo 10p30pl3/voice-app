@@ -166,7 +166,7 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
     const amdEnabled = tenant.amd?.enabled ?? (process.env.AMD_DEFAULT_ENABLED === 'true');
     const amdMode = tenant.amd?.mode || process.env.AMD_DEFAULT_MODE || 'active';
     const bargeinLevel = tenant.bargeinLevel ?? parseInt(process.env.BARGEIN_LEVEL || '3', 10);
-    const bargeinGraceSec = Number(tenant.bargeinGraceSec ?? process.env.BARGEIN_GRACE_SEC ?? 5);
+    const bargeinGraceSec = Number(tenant.bargeinGraceSec ?? process.env.BARGEIN_GRACE_SEC ?? 8);
     const codec = tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'g711_ulaw';
     const maxSec = tenant.maxDurationSec || parseInt(process.env.MAX_CALL_DURATION_SEC || '180', 10);
     const dtmfEnabled = tenant.dtmf?.enabled ?? (process.env.DTMF_DEFAULT_ENABLED !== 'false');

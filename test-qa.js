@@ -443,7 +443,7 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   const graceHarness = {
     callId: 'qa-bargein-grace',
     startedAt: new Date(Date.now() - 2000), // 2s decorridos de chamada
-    bargeinGraceSec: 5,
+    bargeinGraceSec: 8,
     isSafetyExpiring: false,
     isAgentTalking: true,
     killed: false,
@@ -468,7 +468,7 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
     }
   };
 
-  // Dentro dos primeiros 5s (2s decorridos): deve bloquear interrupção
+  // Dentro dos primeiros 8s (2s decorridos): deve bloquear interrupção
   assert.strictEqual(graceHarness.isBargeinGraceActive(), true);
   assert.strictEqual(graceHarness.canTriggerBargeIn(), false);
   const blockedResult = graceHarness.triggerBargeIn('speech_started');
@@ -476,8 +476,8 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   assert.strictEqual(graceHarness.killed, false);
   assert.strictEqual(graceHarness.isAgentTalking, true);
 
-  // Após os 5s (6s decorridos): deve liberar corte de fala normalmente
-  graceHarness.startedAt = new Date(Date.now() - 6000);
+  // Após os 8s (9s decorridos): deve liberar corte de fala normalmente
+  graceHarness.startedAt = new Date(Date.now() - 9000);
   assert.strictEqual(graceHarness.isBargeinGraceActive(), false);
   assert.strictEqual(graceHarness.canTriggerBargeIn(), true);
   const allowedResult = graceHarness.triggerBargeIn('speech_started');

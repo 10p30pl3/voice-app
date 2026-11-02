@@ -467,7 +467,7 @@ async function testCpaas() {
 async function testBargeinGrace({ tenantManager } = {}) {
   const start = process.hrtime.bigint();
   const tenant = tenantManager ? tenantManager.getDefaultTenant() : {};
-  const graceSec = Number(tenant.bargeinGraceSec || process.env.BARGEIN_GRACE_SEC || 5);
+  const graceSec = Number(tenant.bargeinGraceSec || process.env.BARGEIN_GRACE_SEC || 8);
 
   if (graceSec <= 0) {
     throw new Error(`Período de graça configurado é inválido (${graceSec}s)`);
