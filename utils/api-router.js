@@ -56,6 +56,7 @@ const API_COMMANDS_CATALOG = [
     endpoints: [
       { method: 'GET', path: '/health', description: 'Healthcheck do Worker, Drachtio, FreeSWITCH Pool e Tenants' },
       { method: 'GET', path: '/v1/status', description: 'Status detalhado do cluster (FreeSWITCH + Whisper + Chamadas)' },
+      { method: 'GET', path: '/v1/features', description: 'Painel e status detalhado de todas as 10 features de voz ativas no Gateway' },
       { method: 'GET', path: '/v1/cluster/nodes', description: 'Lista nós de mídia FreeSWITCH e nós de IA Whisper' },
       { method: 'GET', path: '/v1/commands', description: 'Catálogo interativo de todas as APIs e comandos de mercado' }
     ]
@@ -155,6 +156,179 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
   const defaultRecDir = process.env.RECORDING_DIR || path.join(__dirname, '..', 'recordings');
   const dashboardHtmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
 
+  function getVoiceFeaturesStatus() {
+    const tenant = tenantManager ? tenantManager.getDefaultTenant() : {};
+    const sttEnabled = tenant.stt?.enabled ?? (process.env.STT_DEFAULT_ENABLED === 'true');
+    const amdEnabled = tenant.amd?.enabled ?? (process.env.AMD_DEFAULT_ENABLED === 'true');
+    const amdMode = tenant.amd?.mode || process.env.AMD_DEFAULT_MODE || 'active';
+    const bargeinLevel = tenant.bargeinLevel ?? parseInt(process.env.BARGEIN_LEVEL || '3', 10);
+    const codec = tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'g711_ulaw';
+    const maxSec = tenant.maxDurationSec || parseInt(process.env.MAX_CALL_DURATION_SEC || '180', 10);
+    const dtmfEnabled = tenant.dtmf?.enabled ?? (process.env.DTMF_DEFAULT_ENABLED !== 'false');
+    const dtmfDebounce = tenant.dtmf?.debounceMs || parseInt(process.env.DTMF_DEBOUNCE_MS || '1200', 10);
+
+    return [
+      {
+        id: 'aec',
+        name: 'Cancelamento de Eco (AEC Dinâmico)',
+        icon: '🛡️',
+        category: 'DSP & Acústica',
+        active: true,
+        badge: 'ATIVO (SONAR)',
+        mode: 'Sonda 425Hz na Conexão',
+        detail: 'Sonda acústica calibrada em 425Hz nos primeiros 700ms. Identifica fone de ouvido vs viva-voz e chaveia o AEC dinâmico no FreeSWITCH sob demanda (economia de ~30% de CPU).',
+        parameters: {
+          sondaFrequencia: '425Hz',
+          duracaoSonda: '700ms',
+          dispositivoPadrao: 'Viva-voz (AEC On) / Fone (AEC Off)',
+          economiaCpu: '~30% em Fone'
+        }
+      },
+      {
+        id: 'noise',
+        name: 'Medição de Ruído & VAD Dinâmico',
+        icon: '📊',
+        category: 'DSP & Acústica',
+        active: true,
+        badge: 'ATIVO (4 PERFIS)',
+        mode: 'EnergyManager RMS em Tempo Real',
+        detail: 'Calcula energia RMS contínua e classifica em 4 perfis acústicos (SILENCE, OFFICE, STREET, TV). Readequa dinamicamente VAD (0.38 a 0.95), prefix padding e silêncio.',
+        parameters: {
+          perfisDisponiveis: 'SILENCE, OFFICE, STREET, TV',
+          faixaVad: '0.38 - 0.95',
+          janelaPcm: '20ms (160 samples)',
+          ajusteSilencio: '350ms - 1500ms'
+        }
+      },
+      {
+        id: 'bargein',
+        name: 'Barge-In Ultrarrápido & Buffer Purge',
+        icon: '⚡',
+        category: 'Interação em Tempo Real',
+        active: bargeinLevel > 0,
+        badge: `NÍVEL ${bargeinLevel} (ATIVO)`,
+        mode: 'Corte Imediato & Limpeza de Playout',
+        detail: 'Corta instantaneamente a voz da IA ao detectar fala do cliente. Envia response.cancel para a OpenAI e executa mod_audio_fork stop_play e uuid_break para silêncio imediato (<15ms).',
+        parameters: {
+          tempoReacao: '<15ms',
+          nivelBargein: bargeinLevel,
+          purgaPlayout: 'Total (mod_audio_fork)',
+          cancelamentoOpenAi: 'Imediato'
+        }
+      },
+      {
+        id: 'codec',
+        name: 'Codec Nativo G.711 μ-law (PCMU)',
+        icon: '🎵',
+        category: 'Mídia & Codecs',
+        active: codec === 'g711_ulaw',
+        badge: codec.toUpperCase(),
+        mode: 'Nativo 8kHz / Fallback 24kHz FIR',
+        detail: 'Áudio digital negociado em G.711 μ-law nativo com OpenAI Realtime, eliminando transcodificação. Fallback automático para Linear PCM 24kHz com filtro FIR anti-aliasing de 7 taps.',
+        parameters: {
+          taxaAmostragem: '8.000 Hz',
+          bitsPorSample: '8-bit μ-law (PCMU)',
+          fallback: 'Linear PCM 24kHz (FIR 7 taps)',
+          latencia: 'Ultra Baixa'
+        }
+      },
+      {
+        id: 'recording',
+        name: 'Gravação Estéreo Dual-Stream (Compliance)',
+        icon: '🎙️',
+        category: 'Compliance & Auditoria',
+        active: sttEnabled,
+        badge: sttEnabled ? 'ESTÉREO 8kHz' : 'SOB DEMANDA',
+        mode: 'Canal L: Cliente | Canal R: Atendente',
+        detail: 'Isolamento estéreo completo das pernas de áudio em formato WAV 8kHz (Canal 1: Cliente / Canal 2: Atendente IA). Ativação sob demanda ou atrelada ao STT, com controle de pausa/retomada PCI/LGPD.',
+        parameters: {
+          formato: 'WAV Linear PCM 8kHz',
+          canais: '2 (L: Cliente, R: IA)',
+          vinculadoStt: true,
+          controlesInCall: 'Start, Pause, Resume, Stop'
+        }
+      },
+      {
+        id: 'stt',
+        name: 'Transcrição em Tempo Real & Redação LGPD',
+        icon: '📝',
+        category: 'IA & Reconhecimento',
+        active: sttEnabled,
+        badge: sttEnabled ? 'WHISPER LOCAL' : 'INATIVO',
+        mode: 'Docker Whisper (:8082) + Regex PII',
+        detail: 'Transcrição dialogada com timestamp e divisão [Cliente / Atendente]. Redator PII regex integrado que mascara automaticamente CPFs, cartões de crédito e dados sensíveis em conformidade com a LGPD.',
+        parameters: {
+          engine: 'faster-whisper (Docker :8082)',
+          redacaoPii: 'Ativa (CPF, Cartão, Telefone)',
+          formato: '[Data Hora] Cliente / Atendente',
+          failOpen: 'Fallback para Humano'
+        }
+      },
+      {
+        id: 'safety',
+        name: 'Mecanismo de Segurança (Hard Cap)',
+        icon: '⏱️',
+        category: 'Proteção & Custos',
+        active: maxSec > 0,
+        badge: `${Math.round(maxSec / 60)} MINUTOS`,
+        mode: `Aviso aos ${maxSec - 10}s + Corte aos ${maxSec}s`,
+        detail: 'Proteção incondicional contra sessões abertas e cobrança indevida na OpenAI. Emite aviso sonoro/verbal claro ao interlocutor 10s antes do encerramento forçado da chamada.',
+        parameters: {
+          limiteMaximo: `${maxSec}s (${Math.round(maxSec / 60)} min)`,
+          avisoPrevio: `${maxSec - 10}s`,
+          toleranciaFala: '1.5s após conclusão',
+          acaoForcada: 'Desligamento imediato e liberação de canais'
+        }
+      },
+      {
+        id: 'amd',
+        name: 'Detecção de Caixa Postal (AMD Inteligente)',
+        icon: '🤖',
+        category: 'Telefonia Inteligente',
+        active: amdEnabled,
+        badge: amdEnabled ? `AMD [${amdMode.toUpperCase()}]` : 'DISPONÍVEL (OUTBOUND)',
+        mode: amdEnabled ? `Modo ${amdMode}` : 'Habilitável via SIP Header',
+        detail: 'Classificador de 6 cenários (Humano, Caixa Postal, Operadora, Silêncio, Ruído, Interrupção). No modo ativo, derruba chamadas não-humanas em menos de 2s com zero consumo de tokens OpenAI.',
+        parameters: {
+          cenarios: 'Humano, Caixa Postal, Operadora, Silêncio',
+          modoPadrao: amdMode,
+          ativacaoOutbound: 'Header X-AMD-Enabled: true'
+        }
+      },
+      {
+        id: 'dtmf',
+        name: 'Captura & Injeção DTMF (RFC2833)',
+        icon: '🔢',
+        category: 'Telefonia & Sinalização',
+        active: dtmfEnabled,
+        badge: 'RFC2833 COM DEBOUNCE',
+        mode: `Buffer In-Call (${dtmfDebounce}ms)`,
+        detail: 'Captura tons DTMF do telefone do cliente com debounce agregador e tecla de terminação "#". Permite interrupção (barge-in) e injeção de dígitos via API para sistemas legados.',
+        parameters: {
+          debounce: `${dtmfDebounce}ms`,
+          terminador: '#',
+          bargeInDtmf: 'Ativo',
+          direcoes: 'Inbound & Outbound'
+        }
+      },
+      {
+        id: 'cpaas',
+        name: 'Controles In-Call CPaaS (/v1)',
+        icon: '🎛️',
+        category: 'Controle de Chamadas',
+        active: true,
+        badge: 'REST API ATIVA',
+        mode: 'Say, Interrupt, Transfer, Hold, Mute, Rec',
+        detail: 'APIs REST completas de mercado para controle e supervisão de chamadas em tempo real: injeção de voz (say/whisper), corte de fala, transferência cega/assistida, espera e gravação.',
+        parameters: {
+          padrao: 'REST JSON (/v1/calls/:callId/...)',
+          comandos: 'say, interrupt, transfer, dtmf, play, mute, hold, recording, hangup',
+          documentacao: 'Catálogo Interativo (/v1/commands)'
+        }
+      }
+    ];
+  }
+
   return async function handleApiRequest(req, res) {
     if (req.method === 'OPTIONS') {
       sendJson(res, 200, { ok: true });
@@ -229,10 +403,25 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
 
     if (req.method === 'GET' && cleanPath === '/v1/status') {
       const health = mediaServer.getHealthObject();
+      const features = getVoiceFeaturesStatus();
       sendJson(res, 200, {
         ...health,
         whisperCluster: whisperPool ? whisperPool.getStats() : null,
-        activeCallsCount: activeBridges.size
+        activeCallsCount: activeBridges.size,
+        voiceFeaturesCount: features.length,
+        voiceFeaturesActiveCount: features.filter((f) => f.active).length,
+        voiceFeatures: features
+      });
+      return true;
+    }
+
+    if (req.method === 'GET' && cleanPath === '/v1/features') {
+      const features = getVoiceFeaturesStatus();
+      sendJson(res, 200, {
+        ok: true,
+        count: features.length,
+        activeCount: features.filter((f) => f.active).length,
+        features
       });
       return true;
     }

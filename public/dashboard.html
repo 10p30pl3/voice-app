@@ -664,6 +664,235 @@
       from { transform: translateX(100%); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
     }
+
+    /* Voice Features Panel */
+    .voice-features-container {
+      background: linear-gradient(180deg, rgba(19, 27, 46, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 22px;
+      margin-bottom: 24px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+    .voice-features-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .vfh-title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .vfh-icon-badge {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.25));
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .vfh-title {
+      font-size: 16px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .vfh-active-count {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #34d399;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .vfh-desc {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .vfh-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Quick status chips bar */
+    .vf-chips-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 0 6px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .vf-chip {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 11.5px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-main);
+      transition: all 0.2s;
+    }
+    .vf-chip.active {
+      border-color: rgba(16, 185, 129, 0.35);
+      background: rgba(16, 185, 129, 0.08);
+    }
+    .vf-chip:hover {
+      border-color: var(--primary);
+      transform: translateY(-1px);
+    }
+    .vf-chip .chip-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-dim);
+    }
+    .vf-chip .chip-dot.active {
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+    .vf-chip .chip-name {
+      font-weight: 600;
+    }
+    .vf-chip .chip-status {
+      color: var(--text-muted);
+      font-size: 10.5px;
+    }
+
+    /* Cards grid */
+    .vf-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+      transition: all 0.3s ease;
+    }
+    .vf-cards-grid.collapsed {
+      display: none;
+    }
+    .vf-card {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: all 0.2s;
+      position: relative;
+    }
+    .vf-card:hover {
+      border-color: #334155;
+      background: #141e34;
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+    }
+    .vf-card.active {
+      border-left: 3px solid var(--success);
+    }
+    .vfc-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .vfc-name-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .vfc-icon {
+      font-size: 20px;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .vfc-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .vfc-cat {
+      font-size: 10px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .vfc-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }
+    .vfc-badge.active {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .vfc-badge.level {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    .vfc-badge.purple {
+      background: rgba(139, 92, 246, 0.15);
+      color: #c4b5fd;
+      border: 1px solid rgba(139, 92, 246, 0.3);
+    }
+    .vfc-badge.muted {
+      background: rgba(100, 116, 139, 0.15);
+      color: #94a3b8;
+      border: 1px solid rgba(100, 116, 139, 0.3);
+    }
+    .vfc-mode {
+      font-size: 11px;
+      font-weight: 600;
+      color: #a5b4fc;
+      background: rgba(79, 70, 229, 0.12);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      padding: 4px 8px;
+      border-radius: 6px;
+      display: inline-block;
+    }
+    .vfc-detail {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+    .vfc-params {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .vfc-param-tag {
+      font-size: 10px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #cbd5e1;
+    }
   </style>
 </head>
 <body>
@@ -711,6 +940,10 @@
       <span>📞 Chamadas ao Vivo</span>
       <span class="badge-count zero" id="badge-calls-count">0</span>
     </button>
+    <button class="tab-btn" onclick="switchTab('features')">
+      <span>🎛️ Features de Voz</span>
+      <span class="badge-count" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);" id="badge-vf-count">10/10</span>
+    </button>
     <button class="tab-btn" onclick="switchTab('recordings')">
       <span>🎙️ Gravações & Compliance</span>
       <span class="badge-count zero" id="badge-rec-count">0</span>
@@ -756,6 +989,38 @@
             <div class="metric-value" id="stat-uptime">0s</div>
           </div>
           <div class="metric-icon">⏱️</div>
+        </div>
+      </div>
+
+      <!-- PAINEL DE FEATURES DE VOZ & DSP -->
+      <div class="voice-features-container">
+        <div class="voice-features-header">
+          <div class="vfh-title-group">
+            <div class="vfh-icon-badge">🎛️</div>
+            <div>
+              <div class="vfh-title">
+                Features da Plataforma de Voz
+                <span class="vfh-active-count" id="vf-active-pill">Carregando...</span>
+              </div>
+              <div class="vfh-desc" id="features-summary-text">Cancelamento de eco (AEC Sonar 425Hz), medição de ruído dinâmico, codec G.711 μ-law, gravação estéreo e proteção de custos.</div>
+            </div>
+          </div>
+          <div class="vfh-actions">
+            <button class="btn btn-sm" id="btn-toggle-vf" onclick="toggleVoiceFeaturesView()">
+              <span id="lbl-vf-toggle">Recolher Detalhes ▲</span>
+            </button>
+            <button class="btn btn-sm" onclick="fetchVoiceFeatures()">Atualizar</button>
+          </div>
+        </div>
+
+        <!-- Quick Status Chips Bar -->
+        <div class="vf-chips-bar" id="vf-chips-bar">
+          <span style="color: var(--text-muted); font-size: 11px;">Carregando status das features de voz...</span>
+        </div>
+
+        <!-- Grid de Cards Detalhados das Features -->
+        <div class="vf-cards-grid" id="vf-cards-grid">
+          <!-- Renderizado dinamicamente via JS a partir de /v1/features -->
         </div>
       </div>
 
@@ -857,6 +1122,37 @@
       </div>
       <div id="api-catalog-container" style="display: flex; flex-direction: column; gap: 20px;">
         Carregando catálogo...
+      </div>
+    </section>
+
+    <!-- TAB 5: FEATURES DE VOZ (VISÃO COMPLETA & TELEMETRIA) -->
+    <section id="tab-features" class="tab-content">
+      <div class="calls-header">
+        <div class="section-title">
+          <span>🎛️ Features da Plataforma de Voz & Motores DSP</span>
+          <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);" id="lbl-vf-tab-summary">Status em tempo real de cancelamento de eco, medição de ruído, codecs e IA</span>
+        </div>
+        <div>
+          <button class="btn btn-sm" onclick="fetchVoiceFeatures()">Atualizar Status</button>
+        </div>
+      </div>
+
+      <!-- Filtros por Categoria -->
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;" id="vf-cat-filters">
+        <button class="btn btn-sm btn-primary" onclick="filterFeaturesCategory('all', this)">Todas as Features (10)</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('DSP & Acústica', this)">DSP & Acústica</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('Mídia & Codecs', this)">Mídia & Codecs</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('Interação em Tempo Real', this)">Interação em Tempo Real</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('IA & Reconhecimento', this)">IA & Reconhecimento</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('Compliance & Auditoria', this)">Compliance & Auditoria</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('Proteção & Custos', this)">Proteção & Custos</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('Telefonia Inteligente', this)">Telefonia Inteligente</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('Telefonia & Sinalização', this)">Telefonia & Sinalização</button>
+        <button class="btn btn-sm" onclick="filterFeaturesCategory('Controle de Chamadas', this)">Controle de Chamadas</button>
+      </div>
+
+      <div class="vf-cards-grid" id="vf-full-cards-grid" style="grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));">
+        Carregando features de voz...
       </div>
     </section>
 
@@ -1067,6 +1363,7 @@
       const targetContent = document.getElementById(`tab-${tabId}`);
       if (targetContent) targetContent.classList.add('active');
 
+      if (tabId === 'features') fetchVoiceFeatures();
       if (tabId === 'recordings') fetchRecordingsData();
       if (tabId === 'tenants') fetchTenantsData();
       if (tabId === 'api') fetchApiCatalog();
@@ -1755,6 +2052,161 @@
       } catch (err) {}
     }
 
+    // -------------------------------------------------------------
+    // VOICE FEATURES MONITORING & TELEMETRY
+    // -------------------------------------------------------------
+    let cachedVoiceFeatures = [];
+    let vfCardsCollapsed = localStorage.getItem('vf_cards_collapsed') === 'true';
+    let currentVfCategoryFilter = 'all';
+
+    async function fetchVoiceFeatures() {
+      try {
+        const res = await fetch('/v1/features');
+        if (!res.ok) return;
+        const data = await res.json();
+        const features = data.features || [];
+        cachedVoiceFeatures = features;
+
+        const total = features.length;
+        const active = features.filter(f => f.active).length;
+
+        const badgeTab = document.getElementById('badge-vf-count');
+        if (badgeTab) badgeTab.textContent = `${active}/${total}`;
+
+        const pillHeader = document.getElementById('vf-active-pill');
+        if (pillHeader) pillHeader.textContent = `${active}/${total} Features Ativas`;
+
+        const summaryText = document.getElementById('features-summary-text');
+        if (summaryText) {
+          summaryText.textContent = `${active} de ${total} features ativas | Codec: G.711 μ-law | Echo Cancellation: Sonar 425Hz | VAD Adaptativo: Ativo | Hard-Cap: 3min`;
+        }
+
+        renderVoiceFeaturesChips(features);
+        renderVoiceFeaturesCards(features);
+        renderVoiceFeaturesFullTab(features);
+      } catch (err) {
+        console.error('Erro ao carregar features de voz:', err);
+      }
+    }
+
+    function toggleVoiceFeaturesView() {
+      vfCardsCollapsed = !vfCardsCollapsed;
+      localStorage.setItem('vf_cards_collapsed', String(vfCardsCollapsed));
+      const grid = document.getElementById('vf-cards-grid');
+      const lbl = document.getElementById('lbl-vf-toggle');
+      if (grid) {
+        if (vfCardsCollapsed) {
+          grid.classList.add('collapsed');
+          if (lbl) lbl.textContent = 'Ver Detalhes ▼';
+        } else {
+          grid.classList.remove('collapsed');
+          if (lbl) lbl.textContent = 'Recolher Detalhes ▲';
+        }
+      }
+    }
+
+    function renderVoiceFeaturesChips(features) {
+      const container = document.getElementById('vf-chips-bar');
+      if (!container) return;
+
+      container.innerHTML = features.map(f => {
+        const activeClass = f.active ? 'active' : '';
+        const dotClass = f.active ? 'chip-dot active' : 'chip-dot';
+        return `
+          <div class="vf-chip ${activeClass}" title="${escapeHtml(f.detail)}">
+            <span class="${dotClass}"></span>
+            <span>${f.icon}</span>
+            <span class="chip-name">${escapeHtml(f.name.split(' (')[0])}</span>
+            <span class="chip-status">${escapeHtml(f.badge)}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderVoiceFeaturesCards(features) {
+      const container = document.getElementById('vf-cards-grid');
+      if (!container) return;
+
+      const lbl = document.getElementById('lbl-vf-toggle');
+      if (vfCardsCollapsed) {
+        container.classList.add('collapsed');
+        if (lbl) lbl.textContent = 'Ver Detalhes ▼';
+      } else {
+        container.classList.remove('collapsed');
+        if (lbl) lbl.textContent = 'Recolher Detalhes ▲';
+      }
+
+      container.innerHTML = features.map(f => createFeatureCardHtml(f)).join('');
+    }
+
+    function renderVoiceFeaturesFullTab(features) {
+      const container = document.getElementById('vf-full-cards-grid');
+      if (!container) return;
+
+      const filtered = currentVfCategoryFilter === 'all'
+        ? features
+        : features.filter(f => f.category === currentVfCategoryFilter);
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div style="color: var(--text-muted); padding: 30px; text-align: center;">Nenhuma feature encontrada nesta categoria.</div>`;
+        return;
+      }
+
+      container.innerHTML = filtered.map(f => createFeatureCardHtml(f, true)).join('');
+    }
+
+    function filterFeaturesCategory(cat, btn) {
+      currentVfCategoryFilter = cat;
+      const filterGroup = document.getElementById('vf-cat-filters');
+      if (filterGroup) {
+        filterGroup.querySelectorAll('button').forEach(b => b.className = 'btn btn-sm');
+        if (btn) btn.className = 'btn btn-sm btn-primary';
+      }
+      renderVoiceFeaturesFullTab(cachedVoiceFeatures);
+    }
+
+    function createFeatureCardHtml(f, isFullTab = false) {
+      const badgeStyleClass = f.badge.includes('ATIVO') ? 'active'
+        : f.badge.includes('NÍVEL') ? 'level'
+        : f.badge.includes('G.711') ? 'purple'
+        : f.badge.includes('MINUTOS') ? 'purple'
+        : f.active ? 'active' : 'muted';
+
+      const paramEntries = Object.entries(f.parameters || {});
+      const paramsHtml = paramEntries.length > 0 ? `
+        <div class="vfc-params">
+          ${paramEntries.map(([k, v]) => `
+            <span class="vfc-param-tag"><strong>${escapeHtml(k)}:</strong> ${escapeHtml(String(v))}</span>
+          `).join('')}
+        </div>
+      ` : '';
+
+      return `
+        <div class="vf-card ${f.active ? 'active' : ''}">
+          <div class="vfc-top">
+            <div class="vfc-name-group">
+              <div class="vfc-icon">${f.icon}</div>
+              <div>
+                <div class="vfc-name">${escapeHtml(f.name)}</div>
+                <div class="vfc-cat">${escapeHtml(f.category)}</div>
+              </div>
+            </div>
+            <span class="vfc-badge ${badgeStyleClass}">${escapeHtml(f.badge)}</span>
+          </div>
+
+          <div>
+            <span class="vfc-mode">${escapeHtml(f.mode)}</span>
+          </div>
+
+          <div class="vfc-detail">
+            ${escapeHtml(f.detail)}
+          </div>
+
+          ${paramsHtml}
+        </div>
+      `;
+    }
+
     // Modais Helpers
     function openModal(id) { document.getElementById(id).classList.add('open'); }
     function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -1772,6 +2224,7 @@
     // Inicialização
     fetchCallsData();
     fetchClusterStatus();
+    fetchVoiceFeatures();
     startAutoRefresh();
   </script>
 </body>

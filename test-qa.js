@@ -632,6 +632,12 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   const statusRes = await apiReq('GET', '/v1/status');
   assert.strictEqual(statusRes.status, 200);
   assert.ok(statusRes.body.whisperCluster && typeof statusRes.body.whisperCluster.totalNodes === 'number');
+  assert.ok(Array.isArray(statusRes.body.voiceFeatures) && statusRes.body.voiceFeatures.length === 10);
+
+  const featRes = await apiReq('GET', '/v1/features');
+  assert.strictEqual(featRes.status, 200);
+  assert.strictEqual(featRes.body.count, 10);
+  assert.ok(featRes.body.activeCount >= 7);
 
   const nodesRes = await apiReq('GET', '/v1/cluster/nodes');
   assert.strictEqual(nodesRes.status, 200);
