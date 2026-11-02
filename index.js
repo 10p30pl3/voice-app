@@ -21,6 +21,7 @@ const DRACHTIO_LISTEN_PORT = parseInt(process.env.DRACHTIO_LISTEN_PORT || '3000'
 const WORKER_ID = parseInt(process.env.NODE_APP_INSTANCE || process.env.WORKER_ID || '0', 10);
 
 const EnergyManager = require('./utils/energy-manager');
+const CrosstalkFilter = require('./utils/crosstalk-filter');
 const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
 const tenantManager = require('./utils/tenant-manager');
@@ -241,6 +242,18 @@ class OpenAIS2SBridge {
     this.greetingSafetyTimer = null;
     this.graceCompleted = false;
 
+    const crosstalkRatio = Number(
+      this.sipHeaders['x-crosstalk-ratio'] ||
+      this.sipHeaders['X-Crosstalk-Ratio'] ||
+      this.tenant.crosstalkRatio ||
+      process.env.CROSSTALK_RATIO ||
+      0.40
+    );
+    this.crosstalkFilter = new CrosstalkFilter({
+      ratio: crosstalkRatio,
+      hangoverMs: 300
+    });
+
     this.recorder = null;
     this.dtmfBuffer = '';
     this.dtmfTimer = null;
@@ -273,9 +286,15 @@ class OpenAIS2SBridge {
 
   canTriggerBargeIn() {
     if (this.isSafetyExpiring) return false;
-    if (this.graceCompleted) return true;
+    if (this.graceCompleted) {
+      if (this.crosstalkFilter && !this.crosstalkFilter.isGateOpen) {
+        return false;
+      }
+      return true;
+    }
     if (this.isGreetingInProgress || this.isMicMutedByGrace) return false;
     if (this.isBargeinGraceActive()) return false;
+    if (this.crosstalkFilter && !this.crosstalkFilter.isGateOpen) return false;
     return true;
   }
 
@@ -876,10 +895,15 @@ class OpenAIS2SBridge {
           }
         }
 
+        // Filtro de Voz de Fundo (Crosstalk Gate): identifica se o áudio pertence ao usuário principal
+        // ou se é voz secundária/conversa de fundo mais baixa (<40% do volume do usuário).
+        const isPrimaryVoice = this.crosstalkFilter ? this.crosstalkFilter.process(buffer) : true;
+
         if (
           !this.isToneProbe &&
           !amdStillDeciding &&
           !isGraceActive &&
+          isPrimaryVoice &&
           this.openaiReady &&
           this.openaiSocket &&
           this.openaiSocket.readyState === WebSocket.OPEN
@@ -995,7 +1019,7 @@ class OpenAIS2SBridge {
           input: {
             turn_detection: {
               type: 'server_vad',
-              threshold: vadThreshold,
+              threshold: Math.min(0.85, Math.max(0.60, vadThreshold + 0.12)),
               prefix_padding_ms: prefixPaddingMs,
               silence_duration_ms: silenceDurationMs
             }
@@ -1093,6 +1117,7 @@ class OpenAIS2SBridge {
       isBargeinGraceActive: this.isBargeinGraceActive(),
       isMicMutedByGrace: this.isMicMutedByGrace,
       isGreetingInProgress: this.isGreetingInProgress,
+      crosstalkFilter: this.crosstalkFilter ? this.crosstalkFilter.getMetrics() : null,
       codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
       deviceMode: this.deviceMode,
       noiseProfile: this.currentProfile,

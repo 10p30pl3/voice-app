@@ -72,6 +72,25 @@ async function runQaSuite() {
   const restoredPcm = mulawToLinear16(mulawEncoded);
   assert.ok(Math.abs(restoredPcm.readInt16LE(0) - 1500) < 50, 'Quantização G.711 deve preservar sinal');
   assert.ok(Math.abs(restoredPcm.readInt16LE(2) - (-1500)) < 50);
+
+  // 1.4 CrosstalkFilter (Gate de voz de fundo a 40%)
+  const CrosstalkFilter = require('./utils/crosstalk-filter');
+  const xtalk = new CrosstalkFilter({ ratio: 0.40, initialUserRms: 1200, hangoverMs: 40 });
+  const strongChunk = Buffer.alloc(320);
+  for (let i = 0; i < 160; i++) strongChunk.writeInt16LE(Math.sin(i * 0.1) * 1700, i * 2);
+  assert.strictEqual(xtalk.process(strongChunk), true, 'Voz do usuário principal deve passar no gate');
+
+  // Esgota o hangover
+  const silentChunk = Buffer.alloc(320);
+  xtalk.process(silentChunk);
+  xtalk.process(silentChunk);
+  xtalk.process(silentChunk);
+
+  // Voz de fundo fraca (RMS ~250 < 40% de 1200): deve ser bloqueada
+  const weakChunk = Buffer.alloc(320);
+  for (let i = 0; i < 160; i++) weakChunk.writeInt16LE(Math.sin(i * 0.1) * 350, i * 2);
+  assert.strictEqual(xtalk.process(weakChunk), false, 'Voz de fundo deve ser bloqueada pelo gate');
+
   console.log('   ✅ DSP e Codecs de áudio aprovados!\n');
 
   // -------------------------------------------------------------------------
@@ -712,25 +731,30 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   const statusRes = await apiReq('GET', '/v1/status');
   assert.strictEqual(statusRes.status, 200);
   assert.ok(statusRes.body.whisperCluster && typeof statusRes.body.whisperCluster.totalNodes === 'number');
-  assert.ok(Array.isArray(statusRes.body.voiceFeatures) && statusRes.body.voiceFeatures.length === 11);
+  assert.ok(Array.isArray(statusRes.body.voiceFeatures) && statusRes.body.voiceFeatures.length === 12);
 
   const featRes = await apiReq('GET', '/v1/features');
   assert.strictEqual(featRes.status, 200);
-  assert.strictEqual(featRes.body.count, 11);
-  assert.ok(featRes.body.activeCount >= 8);
+  assert.strictEqual(featRes.body.count, 12);
+  assert.ok(featRes.body.activeCount >= 9);
 
-  // 9.1.1 Diagnóstico das 11 Features de Voz (/v1/features/test)
+  // 9.1.1 Diagnóstico das 12 Features de Voz (/v1/features/test)
   const diagRes = await apiReq('POST', '/v1/features/test');
   assert.strictEqual(diagRes.status, 200);
   assert.strictEqual(diagRes.body.ok, true);
-  assert.strictEqual(diagRes.body.total, 11);
-  assert.strictEqual(diagRes.body.passed, 11);
+  assert.strictEqual(diagRes.body.total, 12);
+  assert.strictEqual(diagRes.body.passed, 12);
   assert.strictEqual(diagRes.body.failed, 0);
   assert.ok(diagRes.body.totalDurationMs < 1000);
-  assert.strictEqual(diagRes.body.features.length, 11);
+  assert.strictEqual(diagRes.body.features.length, 12);
   assert.strictEqual(diagRes.body.features[0].test.passed, true);
 
-  // 9.1.2 Teste de feature individual (/v1/features/bargein_grace/test)
+  // 9.1.2 Teste de feature individual (/v1/features/crosstalk_filter/test e /v1/features/bargein_grace/test)
+  const xtalkTestRes = await apiReq('POST', '/v1/features/crosstalk_filter/test');
+  assert.strictEqual(xtalkTestRes.status, 200);
+  assert.strictEqual(xtalkTestRes.body.ok, true);
+  assert.strictEqual(xtalkTestRes.body.test.passed, true);
+
   const graceTestRes = await apiReq('POST', '/v1/features/bargein_grace/test');
   assert.strictEqual(graceTestRes.status, 200);
   assert.strictEqual(graceTestRes.body.ok, true);

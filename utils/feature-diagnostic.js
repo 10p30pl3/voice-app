@@ -501,11 +501,54 @@ async function testBargeinGrace({ tenantManager } = {}) {
   };
 }
 
+async function testCrosstalkFilter(ctx = {}) {
+  const start = process.hrtime.bigint();
+  const CrosstalkFilter = require('./crosstalk-filter');
+  const filter = new CrosstalkFilter({ ratio: 0.40, initialUserRms: 1200, hangoverMs: 40 });
+
+  // 1. Gera áudio forte do usuário principal (RMS ~1200)
+  const userSpeechChunk = Buffer.alloc(320);
+  for (let i = 0; i < 160; i++) {
+    userSpeechChunk.writeInt16LE(Math.sin(i * 0.1) * 1700, i * 2);
+  }
+  const userAllowed = filter.process(userSpeechChunk);
+  if (!userAllowed) {
+    throw new Error('Filtro de Crosstalk bloqueou erroneamente a voz do usuário principal');
+  }
+
+  // 2. Esgota o hangover com pequenos silêncios
+  const silenceChunk = Buffer.alloc(320);
+  filter.process(silenceChunk);
+  filter.process(silenceChunk);
+  filter.process(silenceChunk);
+
+  // 3. Gera áudio fraco de voz de fundo (RMS ~250, < 40% de 1200)
+  const backgroundChunk = Buffer.alloc(320);
+  for (let i = 0; i < 160; i++) {
+    backgroundChunk.writeInt16LE(Math.sin(i * 0.1) * 350, i * 2);
+  }
+  const bgAllowed = filter.process(backgroundChunk);
+  if (bgAllowed) {
+    throw new Error('Filtro de Crosstalk permitiu indevidamente a passagem de voz de fundo (<40% do volume do usuário)');
+  }
+
+  const durationMs = Math.max(0.1, Number((process.hrtime.bigint() - start) / 1000000n));
+  return {
+    id: 'crosstalk_filter',
+    name: 'Filtro de Vozes de Fundo (Crosstalk Gate)',
+    passed: true,
+    durationMs: Number(durationMs.toFixed(2)),
+    result: 'APROVADO',
+    details: 'Gate acústico validado: voz do usuário principal (RMS 1200) permitida com sustentação; vozes de fundo secundárias (<40% do volume) 100% bloqueadas antes da OpenAI.'
+  };
+}
+
 const DIAGNOSTIC_RUNNERS = {
   aec: testAec,
   noise: testNoise,
   bargein: testBargein,
   bargein_grace: testBargeinGrace,
+  crosstalk_filter: testCrosstalkFilter,
   codec: testCodec,
   recording: testRecording,
   stt: testStt,

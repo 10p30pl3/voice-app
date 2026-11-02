@@ -242,6 +242,22 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
         }
       },
       {
+        id: 'crosstalk_filter',
+        name: 'Filtro de Vozes de Fundo (Crosstalk Gate)',
+        icon: '🛡️',
+        category: 'DSP & Acústica',
+        active: true,
+        badge: 'ATIVO (GATE 40%)',
+        mode: 'Calibração Adaptativa + Gate 40%',
+        detail: 'Mede continuamente o volume real do interlocutor principal. Descarta vozes secundárias e conversas de fundo que tenham volume abaixo de 40% do usuário, impedindo falsas interrupções e respostas indevidas.',
+        parameters: {
+          sensibilidadeFundo: '40% do volume do usuário',
+          hangover: '300ms',
+          camadaProtecao: 'Gate Local + VAD OpenAI Calibrado',
+          calibracaoVolume: 'Dinâmica (Int16 RMS Adaptativo)'
+        }
+      },
+      {
         id: 'codec',
         name: 'Codec Nativo G.711 μ-law (PCMU)',
         icon: '🎵',
