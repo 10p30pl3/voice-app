@@ -195,16 +195,16 @@ class OpenAIS2SBridge {
 
     this.profiles = {
       SILENCE: {
-        fone: { base: 0.38, prefix: 200, silence: 350 },
-        viva: { base: 0.45, prefix: 250, silence: 400 }
+        fone: { base: 0.45, prefix: 300, silence: 750 },
+        viva: { base: 0.50, prefix: 350, silence: 800 }
       },
       OFFICE: {
-        fone: { base: 0.55, prefix: 400, silence: 500 },
-        viva: { base: 0.55, prefix: 500, silence: 600 }
+        fone: { base: 0.55, prefix: 400, silence: 800 },
+        viva: { base: 0.55, prefix: 500, silence: 850 }
       },
       STREET: {
-        fone: { base: 0.75, prefix: 500, silence: 600 },
-        viva: { base: 0.75, prefix: 600, silence: 800 }
+        fone: { base: 0.75, prefix: 500, silence: 900 },
+        viva: { base: 0.75, prefix: 600, silence: 950 }
       },
       TV: {
         fone: { base: 0.95, prefix: 1000, silence: 1200 },
@@ -994,15 +994,17 @@ class OpenAIS2SBridge {
         }
 
         // Encaminha áudio ao Whisper / Verifier:
-        // Se a biometria neural estiver ativa, envia o áudio bruto para o modelo poder avaliar a voz;
-        // caso contrário, envia o effectiveBuffer para o Whisper não transcrever ruídos de fundo.
+        // Durante a carência inicial/saudação (isGraceActive), NÃO envia áudio para a biometria
+        // neural para evitar cadastrar ruídos de fundo, TV ou terceiros como titular da chamada.
         if (this.whisperSession && !this.isToneProbe) {
           if (this.whisperSession.isAmdEnabled && !this.whisperSession.decisionReceived) {
             this.whisperSession.pushAudio(buffer, 8000);
-          } else if (this.isNeuralFilterActive) {
-            this.whisperSession.pushAudio(buffer, 8000);
           } else if (!isGraceActive) {
-            this.whisperSession.pushAudio(effectiveBuffer, 8000);
+            if (this.isNeuralFilterActive) {
+              this.whisperSession.pushAudio(buffer, 8000);
+            } else {
+              this.whisperSession.pushAudio(effectiveBuffer, 8000);
+            }
           }
         }
 
@@ -1049,11 +1051,11 @@ class OpenAIS2SBridge {
       this.deviceMode = 'fone_ouvido';
       this.currentProfile = this.energyManager.getClassification();
       const config = this.profiles[this.currentProfile].fone;
-      vadThreshold = config.base;
-      prefixPaddingMs = config.prefix;
-      silenceDurationMs = config.silence;
+      vadThreshold = Number(this.tenant?.vadThreshold || config.base);
+      prefixPaddingMs = Number(this.tenant?.prefixPaddingMs || config.prefix);
+      silenceDurationMs = Number(this.tenant?.silenceDurationMs || Math.max(750, config.silence));
       console.log(
-        `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Ambiente ${this.currentProfile} | VAD ${vadThreshold} (Sonar pulado para 0ms de atraso)`
+        `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms (Sonar pulado para 0ms de atraso)`
       );
     } else if (bargeinLevel >= 3) {
       this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
@@ -1086,12 +1088,12 @@ class OpenAIS2SBridge {
       this.currentProfile = this.energyManager.getClassification();
       const config = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
 
-      vadThreshold = config.base;
-      prefixPaddingMs = config.prefix;
-      silenceDurationMs = config.silence;
+      vadThreshold = Number(this.tenant?.vadThreshold || config.base);
+      prefixPaddingMs = Number(this.tenant?.prefixPaddingMs || config.prefix);
+      silenceDurationMs = Number(this.tenant?.silenceDurationMs || Math.max(750, config.silence));
 
       console.log(
-        `[${this.callId}] 🎯 SONAR LOCK: Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold}`
+        `[${this.callId}] 🎯 SONAR LOCK: Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms`
       );
     } else {
       this.calibrationActive = false;
