@@ -199,7 +199,14 @@ class FreeSwitchPool {
       };
 
       if (result.dialog) {
-        result.dialog.on('destroy', releaseNodeSlot);
+        result.dialog.on('destroy', () => {
+          releaseNodeSlot();
+          if (result.endpoint) {
+            try {
+              result.endpoint.destroy();
+            } catch {}
+          }
+        });
       }
 
       return {

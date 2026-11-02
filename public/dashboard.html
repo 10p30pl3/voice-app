@@ -1394,7 +1394,19 @@
         if (res.ok) {
           showToast('Chamada encerrada com sucesso', 'info');
           if (activeDrawerCallId === callId) closeDrawer();
-          fetchCallsData();
+          cachedCalls = cachedCalls.filter(c => c.callId !== callId);
+          renderCallCards(cachedCalls);
+          document.getElementById('stat-active-calls').textContent = cachedCalls.length;
+          const badge = document.getElementById('badge-calls-count');
+          if (badge) {
+            badge.textContent = cachedCalls.length;
+            badge.className = cachedCalls.length > 0 ? 'badge-count' : 'badge-count zero';
+          }
+          document.getElementById('lbl-calls-summary').textContent =
+            cachedCalls.length === 1 ? '1 chamada ativa' : `${cachedCalls.length} chamadas ativas`;
+          setTimeout(fetchCallsData, 500);
+        } else {
+          showToast('Erro ao desligar chamada', 'error');
         }
       } catch (e) {
         showToast('Erro ao desligar chamada', 'error');

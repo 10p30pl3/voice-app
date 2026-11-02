@@ -288,6 +288,11 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       const bridge = activeBridges.get(callId);
 
       if (!bridge) {
+        if ((req.method === 'DELETE' && !action) || (req.method === 'POST' && action === 'hangup')) {
+          activeBridges.delete(callId);
+          sendJson(res, 200, { ok: true, callId, command: 'hangup', reason: 'already_terminated' });
+          return true;
+        }
         sendJson(res, 404, { error: 'call_not_found', message: `Chamada ativa não encontrada: ${callId}` });
         return true;
       }
@@ -302,6 +307,7 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       if ((req.method === 'DELETE' && !action) || (req.method === 'POST' && action === 'hangup')) {
         const reason = body.reason || 'api_hangup';
         bridge.terminateCall(reason);
+        activeBridges.delete(callId);
         sendJson(res, 200, { ok: true, callId, command: 'hangup', reason });
         return true;
       }

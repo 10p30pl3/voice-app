@@ -231,9 +231,14 @@ class OpenAIS2SBridge {
     this.transcriptLog = [];
     this.lastTurn = null;
     this.activeAudioFormat = this.useG711 ? 'g711_ulaw' : 'pcm24k';
+    this.cleanupHandler = null;
 
     this.handleEslEvent = this.handleEslEvent.bind(this);
     this.handleDtmf = this.handleDtmf.bind(this);
+  }
+
+  setCleanupHandler(handler) {
+    this.cleanupHandler = handler;
   }
 
   handleEslEvent(evt) {
@@ -1024,7 +1029,14 @@ class OpenAIS2SBridge {
   }
 
   terminateCall(reason = 'normal_hangup') {
-    if (this.isTerminated) return;
+    if (this.isTerminated) {
+      if (this.cleanupHandler) {
+        const cb = this.cleanupHandler;
+        this.cleanupHandler = null;
+        try { cb(reason); } catch {}
+      }
+      return;
+    }
     this.isTerminated = true;
 
     console.log(`[${this.callId}] Encerrando chamada (Motivo: ${reason})...`);
@@ -1034,7 +1046,18 @@ class OpenAIS2SBridge {
       } catch {}
       this.dialog = null;
     }
+    if (this.endpoint) {
+      try {
+        this.endpoint.destroy();
+      } catch {}
+      this.endpoint = null;
+    }
     this.stop().catch(() => {});
+    if (this.cleanupHandler) {
+      const cb = this.cleanupHandler;
+      this.cleanupHandler = null;
+      try { cb(reason); } catch {}
+    }
   }
 
   async stop() {
@@ -1060,6 +1083,13 @@ class OpenAIS2SBridge {
       try {
         this.endpoint.conn.removeListener('esl::event::CUSTOM::*', this.handleEslEvent);
       } catch {}
+    }
+
+    if (this.endpoint) {
+      try {
+        this.endpoint.destroy();
+      } catch {}
+      this.endpoint = null;
     }
 
     if (this.mediaBridge) {
@@ -1183,14 +1213,30 @@ async function originateOutboundCall(params) {
     bridge = new OpenAIS2SBridge(tenant, sipHeaders);
     activeBridges.set(callId, bridge);
 
-    dialog.on('destroy', async () => {
-      console.log(`[${callId}] Chamada outbound encerrada.`);
+    let cleanedUp = false;
+    const cleanupCall = async (reason = 'normal_hangup') => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      console.log(`[${callId}] Limpando chamada outbound (Motivo: ${reason})...`);
       activeBridges.delete(callId);
       releaseTenantSlotOnce();
       if (releaseNodeSlot) releaseNodeSlot();
+      if (endpoint) {
+        try { endpoint.destroy(); } catch {}
+      }
+      if (dialog) {
+        try { dialog.destroy(); } catch {}
+      }
       try {
         if (bridge) await bridge.stop();
       } catch {}
+    };
+
+    bridge.setCleanupHandler(cleanupCall);
+
+    dialog.on('destroy', async () => {
+      console.log(`[${callId}] Chamada outbound encerrada.`);
+      await cleanupCall('dialog_destroy');
     });
 
     bridge.start({ callId, endpoint, dialog, caller: from, called: to }).catch((err) => {
@@ -1287,14 +1333,30 @@ srf.invite(async (req, res) => {
     bridge = new OpenAIS2SBridge(tenant, sipHeaders);
     activeBridges.set(callId, bridge);
 
-    dialog.on('destroy', async () => {
-      console.log(`[${callId}] Chamada encerrada pelo assinante/rede.`);
+    let cleanedUp = false;
+    const cleanupCall = async (reason = 'normal_hangup') => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      console.log(`[${callId}] Limpando recursos da chamada (Motivo: ${reason})...`);
       activeBridges.delete(callId);
       releaseTenantSlotOnce();
       if (releaseNodeSlot) releaseNodeSlot();
+      if (endpoint) {
+        try { endpoint.destroy(); } catch {}
+      }
+      if (dialog) {
+        try { dialog.destroy(); } catch {}
+      }
       try {
         if (bridge) await bridge.stop();
       } catch {}
+    };
+
+    bridge.setCleanupHandler(cleanupCall);
+
+    dialog.on('destroy', async () => {
+      console.log(`[${callId}] Chamada encerrada pelo assinante/rede.`);
+      await cleanupCall('dialog_destroy');
     });
 
     await bridge.start({ callId, endpoint, dialog, caller, called });
