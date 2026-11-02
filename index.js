@@ -218,6 +218,10 @@ class OpenAIS2SBridge {
     this.openaiReadyResolve = null;
 
     this.maxDurationTimer = null;
+    this.warningDurationTimer = null;
+    this.safetyCloseTimer = null;
+    this.isSafetyExpiring = false;
+    this.maxDurationSec = 180;
     this.isTerminated = false;
 
     this.recorder = null;
@@ -390,9 +394,20 @@ class OpenAIS2SBridge {
           console.log(`[${this.callId}] 🔊 Fim da resposta da IA.`);
           this.mediaBridge.endPlaybackStream();
         }
+        if (this.isSafetyExpiring && !this.safetyCloseTimer) {
+          console.log(
+            `[${this.callId}] ⏱️ Aviso de limite de segurança reproduzido pela IA. Encerrando chamada com tolerância de 1.5s.`
+          );
+          this.safetyCloseTimer = setTimeout(() => {
+            this.terminateCall('safety_limit_3_minutes');
+          }, 1500);
+        }
       }
 
       if (body.type === 'input_audio_buffer.speech_started') {
+        if (this.isSafetyExpiring) {
+          return;
+        }
         console.log(`[${this.callId}] 🎤 BARGE-IN: Usuário falou! Interrompendo agente imediatamente...`);
         this.isAgentTalking = false;
         // Purga instantaneamente qualquer áudio acumulado no buffer de playout do mod_audio_fork
@@ -497,11 +512,52 @@ class OpenAIS2SBridge {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
 
-    const maxDurationSec = this.tenant.maxDurationSec || 900;
+    this.maxDurationSec = Number(
+      this.tenant.maxDurationSec || process.env.MAX_CALL_DURATION_SEC || 180
+    );
+    const warningLeadSec = Math.min(10, Math.max(4, Math.floor(this.maxDurationSec / 10)));
+    const warningTimeMs = Math.max(1000, (this.maxDurationSec - warningLeadSec) * 1000);
+
+    // 1. Timer de Aviso Prévio com Fala Explícita de Interrupção aos ~170s
+    this.warningDurationTimer = setTimeout(() => {
+      if (this.isTerminated) return;
+      this.isSafetyExpiring = true;
+      const warningText =
+        'Atenção: esta chamada atingiu o limite de segurança de três minutos e foi interrompida para sua proteção. Agradecemos pelo contato e até logo!';
+      console.warn(
+        `[${this.callId}] ⏱️ Limite de segurança de 3 minutos atingido (${this.maxDurationSec}s). Falando aviso de interrupção ao interlocutor.`
+      );
+
+      // Injeta instrução prioritária na OpenAI Realtime para falar imediatamente
+      if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+        try {
+          this.say(
+            'AVISO DO SISTEMA: O limite máximo de segurança de 3 minutos foi atingido. Encerre imediatamente com o aviso regulamentar.',
+            {
+              role: 'system',
+              interrupt: true,
+              triggerResponse: true,
+              instructions: `Fale IMEDIATAMENTE com voz clara, firme e educada: "${warningText}". Não responda nem diga mais nada.`
+            }
+          );
+        } catch (e) {
+          console.error(`[${this.callId}] Erro ao injetar fala de limite de segurança na OpenAI:`, e.message);
+        }
+      } else if (this.endpoint) {
+        // Fallback acústico caso a OpenAI não esteja conectada
+        try {
+          this.endpoint.play('tone_stream://v=-10;%(400,200,425);%(400,200,425)').catch(() => {});
+        } catch {}
+      }
+    }, warningTimeMs);
+
+    // 2. Hard Cap Inegociável aos 180s (3 minutos): derruba a chamada incondicionalmente para proteção de custos
     this.maxDurationTimer = setTimeout(() => {
-      console.warn(`[${this.callId}] ⏱️ Limite de duração da chamada atingido (${maxDurationSec}s). Encerrando.`);
-      this.terminateCall('max_duration_exceeded');
-    }, maxDurationSec * 1000);
+      console.warn(
+        `[${this.callId}] 🛑 Limite rígido de segurança atingido (${this.maxDurationSec}s). Encerrando chamada para evitar cobrança indevida da OpenAI.`
+      );
+      this.terminateCall('safety_limit_3_minutes');
+    }, this.maxDurationSec * 1000);
 
     // 1. Inicia sessão Whisper (AMD Inteligente e/ou Transcrição STT) se configurado
     this.whisperSession = new WhisperSession({
@@ -837,6 +893,8 @@ class OpenAIS2SBridge {
       called: this.called,
       startedAt: this.startedAt ? this.startedAt.toISOString() : null,
       durationSec,
+      maxDurationSec: this.maxDurationSec || 180,
+      isSafetyExpiring: this.isSafetyExpiring,
       codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
       deviceMode: this.deviceMode,
       noiseProfile: this.currentProfile,
@@ -1062,6 +1120,16 @@ class OpenAIS2SBridge {
 
   async stop() {
     this.isTerminated = true;
+
+    if (this.warningDurationTimer) {
+      clearTimeout(this.warningDurationTimer);
+      this.warningDurationTimer = null;
+    }
+
+    if (this.safetyCloseTimer) {
+      clearTimeout(this.safetyCloseTimer);
+      this.safetyCloseTimer = null;
+    }
 
     if (this.maxDurationTimer) {
       clearTimeout(this.maxDurationTimer);

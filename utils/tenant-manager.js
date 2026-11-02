@@ -26,7 +26,7 @@ class TenantManager {
         'Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma amigável.',
       voice: process.env.OPENAI_VOICE || 'alloy',
       audioCodec: process.env.AUDIO_CODEC_MODE || 'g711_ulaw', // 'g711_ulaw' (telefonia cristalina nativa) ou 'pcm24k'
-      maxDurationSec: parseInt(process.env.MAX_CALL_DURATION_SEC || '900', 10),
+      maxDurationSec: parseInt(process.env.MAX_CALL_DURATION_SEC || '180', 10),
       maxConcurrentCalls: parseInt(process.env.MAX_CONCURRENT_CALLS_PER_TENANT || '200', 10),
       maxCallsPerSecond: parseInt(process.env.MAX_CPS_PER_TENANT || '30', 10),
       bargeinLevel: parseInt(process.env.BARGEIN_LEVEL || '3', 10),
