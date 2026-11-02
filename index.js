@@ -230,6 +230,8 @@ class OpenAIS2SBridge {
         ? sipBargeinGrace
         : this.tenant.bargeinGraceSec ?? process.env.BARGEIN_GRACE_SEC ?? 8
     );
+    this.isMicMutedByGrace = false;
+    this.graceUnmuteTimer = null;
 
     this.recorder = null;
     this.dtmfBuffer = '';
@@ -255,6 +257,7 @@ class OpenAIS2SBridge {
   }
 
   isBargeinGraceActive() {
+    if (this.isMicMutedByGrace) return true;
     if (!this.startedAt || this.bargeinGraceSec <= 0) return false;
     const elapsedSec = (Date.now() - this.startedAt.getTime()) / 1000;
     return elapsedSec < this.bargeinGraceSec;
@@ -262,6 +265,7 @@ class OpenAIS2SBridge {
 
   canTriggerBargeIn() {
     if (this.isSafetyExpiring) return false;
+    if (this.isMicMutedByGrace) return false;
     if (this.isBargeinGraceActive()) return false;
     return true;
   }
@@ -580,6 +584,36 @@ class OpenAIS2SBridge {
 
     if (!this.channelUuid) {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
+    }
+
+    // 0. Bloqueio Físico de Barge-in: Corta o microfone do usuário no FreeSWITCH durante o período de carência (saudação inicial)
+    if (this.bargeinGraceSec > 0) {
+      this.isMicMutedByGrace = true;
+      this.endpoint.api(`uuid_audio ${this.channelUuid} start read mute`).catch((err) => {
+        console.error(`[${this.callId}] 🔇 [BARGE-IN GRACE] Erro ao cortar microfone no FreeSWITCH:`, err.message);
+      });
+      console.log(
+        `[${this.callId}] 🔇 [BARGE-IN GRACE] Microfone do cliente CORTADO no FreeSWITCH por ${this.bargeinGraceSec}s (saudação protegida).`
+      );
+
+      this.graceUnmuteTimer = setTimeout(async () => {
+        if (this.isMicMutedByGrace && !this.isTerminated) {
+          this.isMicMutedByGrace = false;
+          if (this.endpoint && this.channelUuid) {
+            await this.endpoint.api(`uuid_audio ${this.channelUuid} stop read`).catch((err) => {
+              console.error(`[${this.callId}] 🎙️ [BARGE-IN GRACE] Erro ao reativar microfone no FreeSWITCH:`, err.message);
+            });
+          }
+          console.log(
+            `[${this.callId}] 🎙️ [BARGE-IN GRACE] Microfone do cliente REATIVADO no FreeSWITCH (${this.bargeinGraceSec}s concluídos). Pedidos liberados.`
+          );
+          if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
+            try {
+              this.openaiSocket.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+            } catch {}
+          }
+        }
+      }, this.bargeinGraceSec * 1000);
     }
 
     this.maxDurationSec = Number(
@@ -989,6 +1023,7 @@ class OpenAIS2SBridge {
       isSafetyExpiring: this.isSafetyExpiring,
       bargeinGraceSec: this.bargeinGraceSec,
       isBargeinGraceActive: this.isBargeinGraceActive(),
+      isMicMutedByGrace: this.isMicMutedByGrace,
       codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
       deviceMode: this.deviceMode,
       noiseProfile: this.currentProfile,
@@ -1112,8 +1147,11 @@ class OpenAIS2SBridge {
   async setMute(muted) {
     this.isMuted = Boolean(muted);
     if (this.endpoint && this.channelUuid) {
-      const level = this.isMuted ? -4 : 0;
-      await this.endpoint.api(`uuid_audio ${this.channelUuid} start read mute ${level}`).catch(() => {});
+      if (this.isMuted) {
+        await this.endpoint.api(`uuid_audio ${this.channelUuid} start read mute`).catch(() => {});
+      } else {
+        await this.endpoint.api(`uuid_audio ${this.channelUuid} stop read`).catch(() => {});
+      }
     }
     return { isMuted: this.isMuted };
   }
@@ -1181,6 +1219,11 @@ class OpenAIS2SBridge {
   }
 
   terminateCall(reason = 'normal_hangup') {
+    if (this.graceUnmuteTimer) {
+      clearTimeout(this.graceUnmuteTimer);
+      this.graceUnmuteTimer = null;
+    }
+
     if (this.isTerminated) {
       if (this.cleanupHandler) {
         const cb = this.cleanupHandler;
@@ -1214,6 +1257,11 @@ class OpenAIS2SBridge {
 
   async stop() {
     this.isTerminated = true;
+
+    if (this.graceUnmuteTimer) {
+      clearTimeout(this.graceUnmuteTimer);
+      this.graceUnmuteTimer = null;
+    }
 
     if (this.warningDurationTimer) {
       clearTimeout(this.warningDurationTimer);

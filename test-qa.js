@@ -439,27 +439,27 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   bridgeMedia.killAudio();
   assert.strictEqual(clearAiCalled, true, 'killAudio() deve truncar o buffer de gravação da IA no Barge-In');
 
-  // 8.1.1 Teste de Período de Graça de Barge-In (Lockout Inicial nos primeiros N segundos)
+  // 8.1.1 Teste de Período de Graça de Barge-In (Lockout Inicial nos primeiros N segundos e Corte Físico de Microfone)
   const graceHarness = {
     callId: 'qa-bargein-grace',
     startedAt: new Date(Date.now() - 2000), // 2s decorridos de chamada
     bargeinGraceSec: 8,
+    isMicMutedByGrace: true,
     isSafetyExpiring: false,
     isAgentTalking: true,
     killed: false,
-    isBargeinGraceActive() {
-      return false;
-    },
     mediaBridge: {
       killAudio: () => { graceHarness.killed = true; }
     },
     isBargeinGraceActive() {
+      if (this.isMicMutedByGrace) return true;
       if (!this.startedAt || this.bargeinGraceSec <= 0) return false;
       const elapsedSec = (Date.now() - this.startedAt.getTime()) / 1000;
       return elapsedSec < this.bargeinGraceSec;
     },
     canTriggerBargeIn() {
       if (this.isSafetyExpiring) return false;
+      if (this.isMicMutedByGrace) return false;
       if (this.isBargeinGraceActive()) return false;
       return true;
     },
@@ -471,7 +471,8 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
     }
   };
 
-  // Dentro dos primeiros 8s (2s decorridos): deve bloquear interrupção
+  // Dentro dos primeiros 8s (2s decorridos com microfone cortado no FreeSWITCH): deve bloquear interrupção
+  assert.strictEqual(graceHarness.isMicMutedByGrace, true);
   assert.strictEqual(graceHarness.isBargeinGraceActive(), true);
   assert.strictEqual(graceHarness.canTriggerBargeIn(), false);
   const blockedResult = graceHarness.triggerBargeIn('speech_started');
@@ -479,8 +480,9 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   assert.strictEqual(graceHarness.killed, false);
   assert.strictEqual(graceHarness.isAgentTalking, true);
 
-  // Após os 8s (9s decorridos): deve liberar corte de fala normalmente
+  // Após os 8s (9s decorridos e microfone reativado): deve liberar corte de fala normalmente
   graceHarness.startedAt = new Date(Date.now() - 9000);
+  graceHarness.isMicMutedByGrace = false;
   assert.strictEqual(graceHarness.isBargeinGraceActive(), false);
   assert.strictEqual(graceHarness.canTriggerBargeIn(), true);
   const allowedResult = graceHarness.triggerBargeIn('speech_started');
@@ -568,6 +570,16 @@ print("   ✅ Classificador Expandido (6 cenários) + LGPD Redactor aprovados!")
   assert.ok(
     indexContent.includes('if (this.whisperSession && this.whisperSession.isSttEnabled) {\n      this.recorder = new CallRecorder('),
     'Gravação stereo deve ser condicionada estritamente a this.whisperSession.isSttEnabled'
+  );
+
+  // Verifica que o corte de microfone no FreeSWITCH (uuid_audio start read mute / stop read) está implementado
+  assert.ok(
+    indexContent.includes('uuid_audio ${this.channelUuid} start read mute'),
+    'Deve enviar comando FreeSWITCH para cortar microfone do cliente no bargein grace'
+  );
+  assert.ok(
+    indexContent.includes('uuid_audio ${this.channelUuid} stop read'),
+    'Deve enviar comando FreeSWITCH para reativar microfone do cliente ao fim do grace'
   );
   console.log('   ✅ Regra Condicional de Gravação (STT) + DTMF In-Call aprovados!\n');
 
