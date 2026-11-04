@@ -789,12 +789,14 @@
       background: #0f172a;
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 14px;
+      padding: 12px 14px;
       display: flex;
       flex-direction: column;
+      justify-content: space-between;
       gap: 10px;
       transition: all 0.2s;
       position: relative;
+      min-height: 102px;
     }
     .vf-card:hover {
       border-color: #334155;
@@ -869,29 +871,142 @@
       color: #a5b4fc;
       background: rgba(79, 70, 229, 0.12);
       border: 1px solid rgba(99, 102, 241, 0.25);
-      padding: 4px 8px;
+      padding: 3px 7px;
       border-radius: 6px;
       display: inline-block;
     }
-    .vfc-detail {
+    .vfc-sub {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .vfc-info-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 19px;
+      height: 19px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: #94a3b8;
+      font-size: 11px;
+      cursor: help;
+      transition: all 0.15s;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .vfc-info-btn:hover {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: rgba(56, 189, 248, 0.5);
+      color: #38bdf8;
+      transform: scale(1.1);
+    }
+    .vfc-test-chip {
+      font-size: 10.5px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 5px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: help;
+      transition: all 0.15s;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .vfc-test-chip.passed {
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .vfc-test-chip.failed {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+    .vfc-test-chip:hover {
+      filter: brightness(1.2);
+      transform: translateY(-1px);
+    }
+    .vfc-detail, .vfc-params {
+      display: none;
+    }
+
+    /* Global Floating Tooltip */
+    .global-floating-tooltip {
+      display: none;
+      position: absolute;
+      z-index: 999999;
+      background: #0b1324;
+      border: 1px solid #334155;
+      box-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.7), 0 6px 12px -2px rgba(0, 0, 0, 0.5);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: #f1f5f9;
+      font-size: 12px;
+      line-height: 1.45;
+      max-width: 360px;
+      pointer-events: none;
+      white-space: normal;
+      word-break: break-word;
+      font-family: inherit;
+      backdrop-filter: blur(8px);
+    }
+    .global-floating-tooltip .tip-header {
+      font-weight: 700;
+      color: #38bdf8;
+      margin-bottom: 2px;
+      font-size: 12.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .global-floating-tooltip .tip-category {
+      font-size: 10px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .global-floating-tooltip .tip-desc {
+      color: #cbd5e1;
+      margin-bottom: 6px;
       font-size: 11.5px;
-      color: var(--text-muted);
       line-height: 1.45;
     }
-    .vfc-params {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 5px;
+    .global-floating-tooltip .tip-params {
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
       padding-top: 6px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
     }
-    .vfc-param-tag {
-      font-size: 10px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      padding: 2px 6px;
-      border-radius: 4px;
-      color: #cbd5e1;
+    .global-floating-tooltip .tip-params-title {
+      font-weight: 700;
+      color: #94a3b8;
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      margin-bottom: 2px;
+    }
+    .global-floating-tooltip .tip-param-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .global-floating-tooltip .tip-param-key {
+      color: #94a3b8;
+      font-weight: 600;
+      font-size: 10.5px;
+    }
+    .global-floating-tooltip .tip-param-val {
+      color: #e2e8f0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10.5px;
     }
 
     /* Test results box inside cards */
@@ -1030,7 +1145,7 @@
         <span id="txt-refresh">Ao Vivo (1.5s)</span>
       </button>
       <button class="btn btn-primary btn-sm" onclick="openOriginateModal()">
-        <span>+ Nova Chamada Outbound</span>
+        <span>+ Chamada de Teste</span>
       </button>
     </div>
   </header>
@@ -1051,6 +1166,12 @@
     </button>
     <button class="tab-btn" onclick="switchTab('tenants')">
       <span>🏢 Tenants & Prompts da IA</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('trunks')">
+      <span>🌐 Troncos SIP</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('routes')">
+      <span>🔀 Roteamento de Agentes</span>
     </button>
     <button class="tab-btn" onclick="switchTab('api')">
       <span>📋 Catálogo de APIs (/v1)</span>
@@ -1108,7 +1229,7 @@
         <div class="empty-state">
           <h3>Nenhuma chamada ativa no momento</h3>
           <p>Faça uma ligação a partir de um softphone para o ramal <strong>1000</strong> ou clique no botão abaixo para testar uma chamada ativa.</p>
-          <button class="btn btn-primary" onclick="openOriginateModal()">Disparar Chamada de Teste</button>
+          <button class="btn btn-primary" onclick="openOriginateModal()">Chamada de Teste</button>
         </div>
       </div>
     </section>
@@ -1157,16 +1278,12 @@
     <!-- TAB 3: TENANTS & PROMPTS DA IA -->
     <section id="tab-tenants" class="tab-content">
       <!-- Card Destaque: Configuração dos Prompts da IA -->
-      <div style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(139, 92, 246, 0.08)); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 14px; padding: 22px; margin-bottom: 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;">
-        <div>
-          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
-            <span style="font-size: 22px;">🧠</span>
-            <h3 style="font-size: 17px; font-weight: 700; color: #fff;">Configuração de Prompts, Persona e Voz da IA</h3>
-            <span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px;">Hot-Reload em Tempo Real</span>
-          </div>
-          <p style="font-size: 13px; color: var(--text-muted); max-width: 800px; line-height: 1.5;">
-            Configure as instruções de sistema (System Prompt), Prompt ID, modelo e tom de voz da IA. Você pode ajustar o <strong>Tenant Global</strong> (usado por padrão em todas as ligações) ou definir prompts específicos por cliente/DID. As alterações entram em vigor na próxima chamada sem reiniciar o gateway.
-          </p>
+      <div style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(139, 92, 246, 0.08)); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 14px 20px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span style="font-size: 22px;">🧠</span>
+          <h3 style="font-size: 16px; font-weight: 700; color: #fff; margin: 0;">Configuração de Prompts, Persona e Voz da IA</h3>
+          <span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px;">Hot-Reload em Tempo Real</span>
+          <span class="vfc-info-btn" data-tooltip="<div class='tip-header'>🧠 Prompts & Personas</div><div class='tip-desc'>Configure as instruções de sistema (System Prompt), Prompt ID, modelo e tom de voz da IA. Você pode ajustar o Tenant Global (usado por padrão em todas as ligações) ou definir prompts específicos por cliente/DID. As alterações entram em vigor na próxima chamada sem reiniciar o gateway.</div>">ℹ️</span>
         </div>
         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
           <button class="btn btn-primary" onclick="openTenantModal('default')">
@@ -1213,6 +1330,93 @@
       </div>
     </section>
 
+    <!-- TAB: TRONCOS SIP (FREESWITCH) -->
+    <section id="tab-trunks" class="tab-content">
+      <div class="calls-header">
+        <div class="section-title">
+          <span>Troncos SIP (FreeSWITCH)</span>
+          <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);" id="lbl-trunks-summary"></span>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button class="btn btn-sm" onclick="loadTrunksTab()">Recarregar</button>
+          <button class="btn btn-sm" onclick="openProviderModal()">+ Novo Provedor</button>
+          <button class="btn btn-sm btn-primary" onclick="openTrunkModal()">+ Novo Tronco</button>
+        </div>
+      </div>
+      <div class="table-container" style="margin-bottom: 22px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Tronco</th><th>Provedor</th><th>Autenticação</th><th>Status Sofia</th>
+              <th>Keep-Alive</th><th>Tráfego (in/out/falhas)</th><th>Canais</th>
+              <th style="text-align: right; min-width: 230px;">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="trunks-table-body">
+            <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Carregando troncos...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="calls-header">
+        <div class="section-title"><span>Provedores</span>
+          <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);">SIP, SMS e WhatsApp (API HTTP)</span>
+        </div>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>ID</th><th>Nome</th><th>Tipo</th><th>Endpoint</th><th>Ativo</th><th style="text-align: right;">Ações</th></tr></thead>
+          <tbody id="providers-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB: ROTEAMENTO DE AGENTES -->
+    <section id="tab-routes" class="tab-content">
+      <div style="background: var(--card-bg, rgba(255,255,255,0.03)); border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 14px; padding: 18px; margin-bottom: 22px;">
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+          <h3 style="font-size: 15px; font-weight: 700;">📞 Teste de Ligação</h3>
+        </div>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+          <div class="form-group" style="margin: 0;"><label>DID</label><select id="sim-did"><option value="">Carregando...</option></select></div>
+          <div class="form-group" style="margin: 0;"><label>Ligar para</label><input type="text" id="sim-to" placeholder="5511999998888"></div>
+          <button class="btn btn-primary" id="btn-test-call" onclick="runRealRouteTest()">Ligar</button>
+        </div>
+        <div id="sim-result" style="margin-top: 14px; display: none;"></div>
+        <div id="test-log-wrap" style="margin-top: 12px; display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <span style="font-size: 12px; font-weight: 600; color: var(--text-muted);">Log do teste</span>
+            <button class="btn btn-sm" onclick="clearTestLog()">Limpar</button>
+          </div>
+          <div id="test-log" style="font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.6; background: rgba(0,0,0,.35); border-radius: 8px; padding: 10px; max-height: 240px; overflow-y: auto;"></div>
+        </div>
+      </div>
+
+      <div class="calls-header">
+        <div class="section-title" style="display: flex; align-items: center; gap: 8px;">
+          <span>Regras de Entrada</span>
+          <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);" id="lbl-routes-summary"></span>
+          <span class="vfc-info-btn" data-tooltip="<div class='tip-header'>🔀 Roteamento de Chamadas</div><div class='tip-desc'>Definem qual agente de IA atende cada chamada recebida, conforme o DID discado, Caller ID e tronco. A primeira regra ativa que casar vence. Sem regra, vale o mapeamento de DIDs do agente. O limite de canais efetivo é o menor entre tronco, regra e agente.</div>">ℹ️</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-sm" onclick="loadRoutesTab()">Recarregar</button>
+          <button class="btn btn-sm btn-primary" onclick="openRouteModal()">+ Nova Regra</button>
+        </div>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Ordem</th><th>Regra</th><th>Tronco</th><th>DID</th><th>Caller ID</th>
+              <th>Agente</th><th>Políticas</th><th>Canais</th><th style="text-align: right; min-width: 200px;">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="routes-table-body">
+            <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 30px;">Carregando regras...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- TAB 4: API CATALOG -->
     <section id="tab-api" class="tab-content">
       <div class="calls-header">
@@ -1232,16 +1436,17 @@
           <div class="vfh-title-group">
             <div class="vfh-icon-badge">🎛️</div>
             <div>
-              <div class="vfh-title">
-                Features da Plataforma de Voz & Motores DSP
-                <span class="vfh-active-count" id="vf-active-pill">Carregando...</span>
+              <div class="vfh-title" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span>Features da Plataforma de Voz & Motores DSP</span>
+                <span class="vfh-active-count" id="vf-active-pill" style="cursor: help;">Carregando...</span>
+                <span class="vfc-info-btn" id="features-info-btn" data-tooltip="<div class='tip-header'>🎛️ Motores DSP & Voz</div><div class='tip-desc' id='features-tooltip-desc'>Cancelamento de eco (AEC Sonar 425Hz), medição de ruído dinâmico, codec G.711 μ-law, gravação estéreo e proteção de custos.</div>">ℹ️</span>
               </div>
-              <div class="vfh-desc" id="features-summary-text">Cancelamento de eco (AEC Sonar 425Hz), medição de ruído dinâmico, codec G.711 μ-law, gravação estéreo e proteção de custos.</div>
+              <div class="vfh-desc" id="features-summary-text" style="display: none;"></div>
             </div>
           </div>
           <div class="vfh-actions" style="display: flex; gap: 8px;">
             <button class="btn btn-sm btn-primary" id="btn-run-diag" onclick="runFeaturesDiagnostic()">🔄 Atualizar & Testar Features</button>
-            <button class="btn btn-sm" onclick="fetchVoiceFeatures(false)" title="Apenas recarrega dados sem reexecutar testes">Recarregar</button>
+            <button class="btn btn-sm" onclick="fetchVoiceFeatures(false)" data-tooltip="Recarrega dados sem reexecutar testes">Recarregar</button>
           </div>
         </div>
 
@@ -1255,30 +1460,26 @@
       </div>
 
       <!-- Card Interativo: Controle Liga/Desliga dos Filtros de Voz de Fundo -->
-      <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.95)); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 14px; padding: 18px 22px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
-          <div>
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
-              <span style="font-size: 22px;">🛡️</span>
-              <h3 style="font-size: 16px; font-weight: 700; color: #fff; margin: 0;">Filtro de Vozes de Fundo & Biometria Vocal</h3>
-              <span id="active-crosstalk-badge" class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px; padding: 3px 8px;">ATIVO: Carregando...</span>
-            </div>
-            <p style="font-size: 12px; color: var(--text-muted); margin: 0; max-width: 680px; line-height: 1.4;">
-              Proteja o atendimento contra interferência de pessoas falando ao fundo. Selecione o motor de filtragem desejado ou desligue sob demanda (vale para as <strong>próximas chamadas</strong>; chamadas em andamento mantêm o modo atual). <em>WeSpeaker/ECAPA são experimentais.</em>
-            </p>
+      <div style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.95)); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 12px; padding: 14px 20px; margin-bottom: 18px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span style="font-size: 20px;">🛡️</span>
+            <h3 style="font-size: 15px; font-weight: 700; color: #fff; margin: 0;">Filtro de Vozes de Fundo & Biometria Vocal</h3>
+            <span id="active-crosstalk-badge" class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px; padding: 3px 8px;">ATIVO: Carregando...</span>
+            <span class="vfc-info-btn" data-tooltip="<div class='tip-header'>🛡️ Filtro de Vozes de Fundo & Biometria Vocal</div><div class='tip-desc'>Protege o atendimento contra interferência de pessoas falando ao fundo. Selecione o motor desejado (vale para as próximas chamadas). WeSpeaker e ECAPA-TDNN são modelos neurais experimentais.</div>">ℹ️</span>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-            <button class="btn btn-sm" id="btn-mode-atual" onclick="setGlobalCrosstalkMode('atual', this)" style="display: flex; align-items: center; gap: 6px;">
+            <button class="btn btn-sm" id="btn-mode-atual" onclick="setGlobalCrosstalkMode('atual', this)" style="display: flex; align-items: center; gap: 6px;" data-tooltip="<div class='tip-header'>🛡️ DSP Atual (YIN F0 + Spectral Gate)</div><div class='tip-desc'>Algoritmo nativo em tempo real. Rápido, leve e com baixíssima latência. Filtra vozes secundárias por pitch e gating espectral.</div>">
               <span>🛡️ DSP Atual (YIN F0)</span>
             </button>
-            <button class="btn btn-sm" id="btn-mode-wespeaker" onclick="setGlobalCrosstalkMode('wespeaker', this)" style="display: flex; align-items: center; gap: 6px;">
+            <button class="btn btn-sm" id="btn-mode-wespeaker" onclick="setGlobalCrosstalkMode('wespeaker', this)" style="display: flex; align-items: center; gap: 6px;" data-tooltip="<div class='tip-header'>🧬 WeSpeaker (CAM++)</div><div class='tip-desc'>Rede neural profunda CAM++ para extração contínua de embeddings de voz e identificação do locutor principal.</div>">
               <span>🧬 WeSpeaker (CAM++)</span>
             </button>
-            <button class="btn btn-sm" id="btn-mode-ecapa" onclick="setGlobalCrosstalkMode('ecapa', this)" style="display: flex; align-items: center; gap: 6px;">
+            <button class="btn btn-sm" id="btn-mode-ecapa" onclick="setGlobalCrosstalkMode('ecapa', this)" style="display: flex; align-items: center; gap: 6px;" data-tooltip="<div class='tip-header'>🧠 ECAPA-TDNN</div><div class='tip-desc'>Arquitetura convolucional ECAPA-TDNN com agregação estatística com atenção para verificação e diarização vocal de alta precisão.</div>">
               <span>🧠 ECAPA-TDNN</span>
             </button>
-            <button class="btn btn-sm" id="btn-mode-none" onclick="setGlobalCrosstalkMode('none', this)" style="display: flex; align-items: center; gap: 6px; border-color: rgba(239, 68, 68, 0.4); color: #f87171;">
-              <span>⚪ Desligado (Sem Filtro)</span>
+            <button class="btn btn-sm" id="btn-mode-none" onclick="setGlobalCrosstalkMode('none', this)" style="display: flex; align-items: center; gap: 6px; border-color: rgba(239, 68, 68, 0.4); color: #f87171;" data-tooltip="<div class='tip-header'>⚪ Desligado (Sem Filtro)</div><div class='tip-desc'>Desativa qualquer processamento acústico de separação de voz. Todo áudio capturado é entregue diretamente ao modelo de transcrição.</div>">
+              <span>⚪ Desligado</span>
             </button>
           </div>
         </div>
@@ -1330,7 +1531,7 @@
   <div class="modal-overlay" id="modal-originate">
     <div class="modal-card">
       <div class="modal-header">
-        <h3 style="font-size: 16px;">🚀 Disparar Chamada Outbound (Teste)</h3>
+        <h3 style="font-size: 16px;">🚀 Chamada de Teste</h3>
         <button class="btn btn-sm" onclick="closeModal('modal-originate')">✕</button>
       </div>
       <div class="modal-body">
@@ -1340,7 +1541,7 @@
         </div>
         <div class="form-group">
           <label>Número de Origem (From / Caller ID)</label>
-          <input type="text" id="orig-from" value="551140040001" placeholder="ex: 551140040001">
+          <input type="text" id="orig-from" value="5511989785888" placeholder="ex: 5511989785888">
         </div>
         <div class="form-group">
           <label>Tenant</label>
@@ -1349,10 +1550,10 @@
           </select>
         </div>
         <div style="display: flex; gap: 16px; margin-top: 6px;">
-          <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
-            <input type="checkbox" id="orig-amd" checked> Detector de Secretária (AMD)
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;" data-tooltip="<div class='tip-header'>Detector de Secretária (AMD)</div><div class='tip-desc'>Identifica caixas postais, secretárias eletrônicas e gravações de operadora em tempo real.</div>">
+            <input type="checkbox" id="orig-amd"> Detector de Secretária (AMD)
           </label>
-          <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;" data-tooltip="<div class='tip-header'>Transcrição & Gravação Estéreo</div><div class='tip-desc'>Grava áudio em 2 canais independentes (Cliente e IA) e transcreve a conversa em tempo real com Whisper.</div>">
             <input type="checkbox" id="orig-stt" checked> Transcrição (STT) + Gravação Estéreo
           </label>
         </div>
@@ -1363,7 +1564,106 @@
       </div>
       <div class="modal-footer">
         <button class="btn" onclick="closeModal('modal-originate')">Cancelar</button>
-        <button class="btn btn-primary" onclick="submitOriginateCall()">📞 Disparar Agora</button>
+        <button class="btn btn-primary" onclick="submitOriginateCall()">📞 Chamada de Teste</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Provedor -->
+  <div class="modal-overlay" id="modal-provider">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 style="font-size: 16px;">Provedor</h3>
+        <button class="btn btn-sm" onclick="closeModal('modal-provider')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group"><label>Modelo</label>
+          <select id="prov-template" onchange="applyProviderTemplate()">
+            <option value="sip">SIP genérico</option>
+            <option value="sms">SMS (API HTTP)</option>
+            <option value="whatsapp">WhatsApp (API HTTP)</option>
+          </select></div>
+        <div class="form-group"><label>ID (a-z, 0-9, _ -)</label><input type="text" id="prov-id" placeholder="ex: claro"></div>
+        <div class="form-group"><label>Nome</label><input type="text" id="prov-name"></div>
+        <div id="prov-http-fields" style="display: none;">
+          <div class="form-group"><label>URL da API</label><input type="text" id="prov-url" placeholder="https://api.exemplo.com/messages"></div>
+          <div class="form-group"><label>Método</label><select id="prov-method"><option>POST</option><option>GET</option></select></div>
+          <div class="form-group"><label>Headers (JSON)</label><textarea id="prov-headers" rows="3" placeholder='{"Authorization":"Bearer TOKEN"}'></textarea></div>
+          <div class="form-group"><label>Corpo (use {{to}}, {{from}}, {{message}} e variáveis do destinatário)</label><textarea id="prov-body" rows="3"></textarea></div>
+          <div class="form-group"><label>Remetente (from)</label><input type="text" id="prov-from"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('modal-provider')">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveProvider()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Tronco -->
+  <div class="modal-overlay" id="modal-trunk">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 style="font-size: 16px;" id="trunk-modal-title">Novo Tronco SIP</h3>
+        <button class="btn btn-sm" onclick="closeModal('modal-trunk')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group"><label>Modelo rápido</label>
+          <select id="trunk-template" onchange="applyTrunkTemplate()">
+            <option value="">Personalizado</option>
+            <option value="directcall">DirectCall</option>
+            <option value="ippbx">PABX IP (autenticação por IP)</option>
+          </select></div>
+        <div class="form-group"><label>ID</label><input type="text" id="trunk-id" placeholder="ex: claro-sp"></div>
+        <div class="form-group"><label>Nome</label><input type="text" id="trunk-name"></div>
+        <div class="form-group"><label>Provedor</label><select id="trunk-provider"></select></div>
+        <div class="form-group"><label>Proxy / Host</label><input type="text" id="trunk-proxy" placeholder="sip.provedor.com.br"></div>
+        <div class="form-group"><label>Porta</label><input type="number" id="trunk-port" value="5060"></div>
+        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 8px;">
+          <input type="checkbox" id="trunk-register" onchange="toggleTrunkAuth()"> Registrar no provedor (REGISTER)
+        </label>
+        <div id="trunk-auth-fields">
+          <div class="form-group"><label>Usuário</label><input type="text" id="trunk-username"></div>
+          <div class="form-group"><label>Senha</label><input type="password" id="trunk-password" placeholder="(manter atual se vazio)"></div>
+        </div>
+        <div class="form-group"><label>Direção</label>
+          <select id="trunk-direction"><option value="both">Entrada e saída</option><option value="inbound">Somente entrada</option><option value="outbound">Somente saída</option></select></div>
+        <div class="form-group"><label>Canais simultâneos (máx.)</label><input type="number" id="trunk-max" value="30" min="1"></div>
+        <div class="form-group"><label>Ping / Keep-alive (s)</label><input type="number" id="trunk-ping" value="25" min="5"></div>
+        <div class="form-group"><label>Codecs (opcional, ex: PCMU,PCMA)</label><input type="text" id="trunk-codecs"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('modal-trunk')">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveTrunk()">Salvar e aplicar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Regra de roteamento -->
+  <div class="modal-overlay" id="modal-route">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 style="font-size: 16px;" id="route-modal-title">Nova Regra de Roteamento</h3>
+        <button class="btn btn-sm" onclick="closeModal('modal-route')">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="route-id">
+        <div class="form-group"><label>Nome</label><input type="text" id="route-name" placeholder="Suporte 0800"></div>
+        <div class="form-group"><label>Tronco de origem</label><select id="route-trunk"></select></div>
+        <div class="form-group"><label>DID (exato, prefixo com *, ou re:regex)</label><input type="text" id="route-did" value="*"></div>
+        <div class="form-group"><label>Caller ID (mesmo formato)</label><input type="text" id="route-caller" value="*"></div>
+        <div class="form-group"><label>Agente (Tenant) de destino</label><select id="route-tenant"></select></div>
+        <div class="form-group"><label>Canais simultâneos da regra (vazio = só limite do agente)</label><input type="number" id="route-max" min="1" placeholder="herdar do agente"></div>
+        <div class="form-group"><label>AMD</label>
+          <select id="route-amd"><option value="tenant_default">Padrão do agente</option><option value="active">Ativo</option><option value="disabled">Desativado</option></select></div>
+        <div class="form-group"><label>Carência do barge-in (s, vazio = padrão do agente)</label><input type="number" id="route-grace" min="0" placeholder="padrão do agente"></div>
+        <div class="form-group"><label>Gravação</label>
+          <select id="route-rec"><option value="tenant_default">Padrão do agente</option><option value="true">Forçar gravação</option><option value="false">Não gravar</option></select></div>
+        <label style="display: flex; align-items: center; gap: 6px; font-size: 13px;"><input type="checkbox" id="route-active" checked> Regra ativa</label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('modal-route')">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveRoute()">Salvar</button>
       </div>
     </div>
   </div>
@@ -1715,6 +2015,12 @@
       if (tabId === 'recordings') fetchRecordingsData();
       if (tabId === 'tenants') fetchTenantsData();
       if (tabId === 'api') fetchApiCatalog();
+      clearInterval(trunksTimer);
+      if (tabId === 'trunks') {
+        loadTrunksTab();
+        trunksTimer = setInterval(() => loadTrunksTab(true), 5000);
+      }
+      if (tabId === 'routes') loadRoutesTab();
     }
 
     function toggleAutoRefresh() {
@@ -1846,7 +2152,7 @@
           <div class="empty-state">
             <h3>Nenhuma chamada ativa no momento</h3>
             <p>Faça uma ligação a partir de um softphone para o ramal <strong>1000</strong> ou clique no botão abaixo para testar uma chamada ativa.</p>
-            <button class="btn btn-primary" onclick="openOriginateModal()">Disparar Chamada de Teste</button>
+            <button class="btn btn-primary" onclick="openOriginateModal()">Chamada de Teste</button>
           </div>
         `;
         return;
@@ -2215,7 +2521,7 @@
 
     async function submitOriginateCall() {
       const to = document.getElementById('orig-to').value.trim();
-      const from = document.getElementById('orig-from').value.trim();
+      const from = document.getElementById('orig-from').value.trim() || '5511989785888';
       const tenantId = document.getElementById('orig-tenant').value;
       const amd = document.getElementById('orig-amd').checked;
       const stt = document.getElementById('orig-stt').checked;
@@ -2773,6 +3079,7 @@
           pillHeader.textContent = testedPassed > 0
             ? `${active}/${total} Ativas | ${testedPassed}/${total} Testadas OK`
             : `${active}/${total} Features Ativas`;
+          pillHeader.setAttribute('data-tooltip', `<div class='tip-header'>🎛️ Telemetria de Voz</div><div class='tip-desc'>${active}/${total} features ativas<br>Codec: G.711 μ-law<br>Echo Cancellation: Sonar 425Hz<br>VAD Adaptativo: Ativo<br>Hard-Cap: 3min</div>`);
         }
 
         const summaryText = document.getElementById('features-summary-text');
@@ -2831,6 +3138,7 @@
         const pillHeader = document.getElementById('vf-active-pill');
         if (pillHeader) {
           pillHeader.textContent = `${active}/${total} Ativas | ${passed}/${total} Testadas OK`;
+          pillHeader.setAttribute('data-tooltip', `<div class='tip-header'>🎛️ Diagnóstico de Voz</div><div class='tip-desc'>${passed}/${total} features aprovadas em ${data.totalDurationMs}ms<br>Codec: G.711 μ-law<br>Echo Cancellation: Sonar 425Hz<br>VAD Adaptativo: Ativo<br>Hard-Cap: 3min</div>`);
         }
 
         const summaryText = document.getElementById('features-summary-text');
@@ -2993,6 +3301,23 @@
       });
     }
 
+    function buildFeatureTooltip(f) {
+      const paramEntries = Object.entries(f.parameters || {});
+      const paramRows = paramEntries.map(([k, v]) => `
+        <div class="tip-param-row">
+          <span class="tip-param-key">${escapeHtml(k)}:</span>
+          <span class="tip-param-val">${escapeHtml(String(v))}</span>
+        </div>
+      `).join('');
+
+      return `
+        <div class="tip-header">${f.icon} ${escapeHtml(f.name)}</div>
+        <div class="tip-category">${escapeHtml(f.category)} · ${escapeHtml(f.badge)}</div>
+        <div class="tip-desc">${escapeHtml(f.detail)}</div>
+        ${paramRows ? `<div class="tip-params"><div class="tip-params-title">Parâmetros Técnicos:</div>${paramRows}</div>` : ''}
+      `;
+    }
+
     function renderVoiceFeaturesChips(features) {
       const container = document.getElementById('vf-chips-bar');
       if (!container) return;
@@ -3000,11 +3325,12 @@
       container.innerHTML = features.map(f => {
         const activeClass = f.active ? 'active' : '';
         const dotClass = f.active ? 'chip-dot active' : 'chip-dot';
+        const tipHtml = buildFeatureTooltip(f);
         const testBadge = f.test
           ? `<span style="font-size: 9.5px; padding: 1px 5px; border-radius: 4px; font-weight: 700; background: ${f.test.passed ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}; color: ${f.test.passed ? '#34d399' : '#f87171'};">${f.test.passed ? '✓' : '✗'} ${f.test.durationMs}ms</span>`
           : '';
         return `
-          <div class="vf-chip ${activeClass}" title="${escapeHtml(f.detail)}">
+          <div class="vf-chip ${activeClass}" style="cursor: help;" data-tooltip="${escapeHtml(tipHtml)}">
             <span class="${dotClass}"></span>
             <span>${f.icon}</span>
             <span class="chip-name">${escapeHtml(f.name.split(' (')[0])}</span>
@@ -3049,43 +3375,30 @@
         : f.badge.includes('SEGUNDOS') ? 'level'
         : f.active ? 'active' : 'muted';
 
-      const paramEntries = Object.entries(f.parameters || {});
-      const paramsHtml = paramEntries.length > 0 ? `
-        <div class="vfc-params">
-          ${paramEntries.map(([k, v]) => `
-            <span class="vfc-param-tag"><strong>${escapeHtml(k)}:</strong> ${escapeHtml(String(v))}</span>
-          `).join('')}
-        </div>
-      ` : '';
+      const tipHtml = buildFeatureTooltip(f);
 
-      const testHtml = f.test ? `
-        <div class="vfc-test-box ${f.test.passed ? 'passed' : 'failed'}">
-          <div class="vfc-test-header">
-            <span class="vfc-test-status">
-              ${f.test.passed ? '✅ TESTE APROVADO' : '❌ FALHA NO TESTE'}
-            </span>
-            <span class="vfc-test-latency">⏱️ ${f.test.durationMs}ms</span>
-          </div>
-          <div class="vfc-test-details">${escapeHtml(f.test.details)}</div>
-        </div>
+      const testChipHtml = f.test ? `
+        <span class="vfc-test-chip ${f.test.passed ? 'passed' : 'failed'}" data-tooltip="<div class='tip-header'>${f.test.passed ? '✅ Teste Aprovado' : '❌ Falha no Teste'} (${f.test.durationMs}ms)</div><div class='tip-desc'>${escapeHtml(f.test.details)}</div>">
+          ${f.test.passed ? '✓ Teste OK' : '✗ Falha'} (${f.test.durationMs}ms)
+        </span>
       ` : '';
 
       const actionsHtml = isFullTab ? `
-        <div class="vfc-card-actions" style="display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; flex-wrap: wrap;">
+        <div class="vfc-card-actions" style="display: flex; gap: 6px; justify-content: flex-end; align-items: center; margin-top: 4px; flex-wrap: wrap;">
           ${f.id === 'crosstalk_filter' ? (f.active
-            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" title="Filtro DSP ativo no Gateway">✓ Ativo</button>
-               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" title="Desligar este filtro">Desligar</button>`
+            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" data-tooltip="Filtro DSP ativo no Gateway">✓ Ativo</button>
+               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" data-tooltip="Desligar este filtro">Desligar</button>`
             : `<button class="btn btn-xs btn-primary" onclick="setGlobalCrosstalkMode('atual', this)">▶ Ligar DSP</button>`
           ) : f.id === 'wespeaker' ? (f.active
-            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" title="WeSpeaker CAM++ ativo no Gateway">✓ Ativo</button>
-               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" title="Desligar este filtro">Desligar</button>`
+            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" data-tooltip="WeSpeaker CAM++ ativo no Gateway">✓ Ativo</button>
+               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" data-tooltip="Desligar este filtro">Desligar</button>`
             : `<button class="btn btn-xs btn-primary" onclick="setGlobalCrosstalkMode('wespeaker', this)">▶ Ligar WeSpeaker</button>`
           ) : f.id === 'ecapa' ? (f.active
-            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" title="ECAPA-TDNN ativo no Gateway">✓ Ativo</button>
-               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" title="Desligar este filtro">Desligar</button>`
+            ? `<button class="btn btn-xs" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: default;" data-tooltip="ECAPA-TDNN ativo no Gateway">✓ Ativo</button>
+               <button class="btn btn-xs btn-outline" style="color: #f87171; border-color: rgba(239, 68, 68, 0.4);" onclick="setGlobalCrosstalkMode('none', this)" data-tooltip="Desligar este filtro">Desligar</button>`
             : `<button class="btn btn-xs btn-primary" onclick="setGlobalCrosstalkMode('ecapa', this)">▶ Ligar ECAPA</button>`
           ) : ''}
-          <button class="btn btn-xs btn-outline" onclick="testSingleFeature('${f.id}', this)" title="Executa diagnóstico isolado desta feature">⚡ Testar Feature</button>
+          <button class="btn btn-xs btn-outline" onclick="testSingleFeature('${f.id}', this)" data-tooltip="Executa diagnóstico isolado desta feature em tempo real">⚡ Testar</button>
         </div>
       ` : '';
 
@@ -3095,28 +3408,481 @@
             <div class="vfc-name-group">
               <div class="vfc-icon">${f.icon}</div>
               <div>
-                <div class="vfc-name">${escapeHtml(f.name)}</div>
+                <div class="vfc-name" style="cursor: help;" data-tooltip="${escapeHtml(tipHtml)}">${escapeHtml(f.name)}</div>
                 <div class="vfc-cat">${escapeHtml(f.category)}</div>
               </div>
             </div>
-            <span class="vfc-badge ${badgeStyleClass}">${escapeHtml(f.badge)}</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="vfc-info-btn" data-tooltip="${escapeHtml(tipHtml)}" title="">ℹ️</span>
+              <span class="vfc-badge ${badgeStyleClass}">${escapeHtml(f.badge)}</span>
+            </div>
           </div>
 
-          <div>
-            <span class="vfc-mode">${escapeHtml(f.mode)}</span>
+          <div class="vfc-sub">
+            <span class="vfc-mode" style="cursor: help;" data-tooltip="${escapeHtml(tipHtml)}">${escapeHtml(f.mode)}</span>
+            ${testChipHtml}
           </div>
-
-          <div class="vfc-detail">
-            ${escapeHtml(f.detail)}
-          </div>
-
-          ${testHtml}
-
-          ${paramsHtml}
 
           ${actionsHtml}
         </div>
       `;
+    }
+
+    // ===================== TRONCOS SIP / PROVEDORES =====================
+    let trunksCache = [];
+    let providersCache = [];
+    let trunksTimer = null;
+
+    async function jsonOrThrow(resp) {
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+      return data;
+    }
+
+    function trunkStateBadge(live) {
+      const st = live?.state || 'UNKNOWN';
+      const map = {
+        REGED: ['#34d399', 'rgba(16,185,129,0.15)'],
+        NOREG: ['#60a5fa', 'rgba(59,130,246,0.15)'],
+        TRYING: ['#fbbf24', 'rgba(245,158,11,0.15)'],
+        REGISTER: ['#fbbf24', 'rgba(245,158,11,0.15)'],
+        PAUSED: ['#9ca3af', 'rgba(156,163,175,0.15)']
+      };
+      const [fg, bg] = map[st] || ['#f87171', 'rgba(239,68,68,0.15)'];
+      const up = live?.status ? ` · ${escapeHtml(live.status)}` : '';
+      return `<span class="tag" style="color:${fg};background:${bg};">${escapeHtml(st)}${up}</span>`;
+    }
+
+    async function loadTrunksTab(silent = false) {
+      try {
+        const [t, p] = await Promise.all([
+          apiFetch('/v1/trunks').then(jsonOrThrow),
+          apiFetch('/v1/providers').then(jsonOrThrow)
+        ]);
+        trunksCache = t.trunks;
+        providersCache = p.providers;
+        renderTrunks();
+        renderProviders();
+      } catch (err) {
+        if (!silent) showToast(`Erro ao carregar troncos: ${escapeHtml(err.message)}`, 'error');
+      }
+    }
+
+    function renderTrunks() {
+      const body = document.getElementById('trunks-table-body');
+      const reged = trunksCache.filter(t => t.live && ['REGED', 'NOREG'].includes(t.live.state) && t.live.status === 'UP').length;
+      document.getElementById('lbl-trunks-summary').textContent = `${reged}/${trunksCache.length} operantes`;
+      if (!trunksCache.length) {
+        body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:30px;">Nenhum tronco cadastrado</td></tr>';
+        return;
+      }
+      body.innerHTML = trunksCache.map(t => {
+        const l = t.live || {};
+        const id = escapeHtml(t.id);
+        const ping = l.pingTimeMs ? `${l.pingTimeMs.toFixed(1)} ms` : '-';
+        const ro = t.external;
+        return `<tr>
+          <td><strong>${escapeHtml(t.name || t.id)}</strong><div style="font-size:11px;color:var(--text-muted);">${id} · ${escapeHtml(t.proxy || t.realm || '')}${ro ? ' · <em>definido em mrf.xml</em>' : ''}</div></td>
+          <td>${escapeHtml(t.providerId || '-')}</td>
+          <td style="font-size:12px;">${t.register ? 'Registro · ' + escapeHtml(t.username || '') : 'Por IP'}</td>
+          <td>${trunkStateBadge(l)}${l.message ? `<div style="font-size:11px;color:var(--text-muted);">${escapeHtml(l.message)}</div>` : ''}</td>
+          <td style="font-size:12px;">${ping}${l.pingFreq ? ` / ${l.pingFreq}s` : ''}</td>
+          <td style="font-size:12px;">${l.callsIn ?? 0} / ${l.callsOut ?? 0} / ${l.failedCallsOut ?? 0}</td>
+          <td style="font-size:12px;">${t.usedChannels || 0}/${t.maxChannels}</td>
+          <td style="text-align:right;white-space:nowrap;">
+            <button class="btn btn-sm" onclick="testTrunk('${id}')" title="Re-registra e lê o status">🔄 Testar</button>
+            ${ro ? '' : `<button class="btn btn-sm" onclick="toggleTrunk('${id}')">${t.active ? '⏸ Pausar' : '▶ Ativar'}</button>
+            <button class="btn btn-sm" onclick="openTrunkModal('${id}')">✏️</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteTrunk('${id}')">🗑️</button>`}
+          </td></tr>`;
+      }).join('');
+    }
+
+    function renderProviders() {
+      const body = document.getElementById('providers-table-body');
+      body.innerHTML = providersCache.map(p => {
+        const id = escapeHtml(p.id);
+        return `<tr><td>${id}</td><td>${escapeHtml(p.name || '')}</td><td><span class="tag">${escapeHtml(p.type)}</span></td>
+          <td style="font-size:12px;color:var(--text-muted);">${escapeHtml(p.http?.url || '-')}</td>
+          <td>${p.active ? '✅' : '⏸'}</td>
+          <td style="text-align:right;"><button class="btn btn-sm" onclick="openProviderModal('${id}')">✏️</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteProvider('${id}')">🗑️</button></td></tr>`;
+      }).join('');
+    }
+
+    async function testTrunk(id) {
+      showToast(`Testando ${escapeHtml(id)}...`, 'info');
+      try {
+        const r = await apiFetch(`/v1/trunks/${encodeURIComponent(id)}/register`, { method: 'POST' }).then(jsonOrThrow);
+        const st = r.live?.state || '?';
+        showToast(`${escapeHtml(id)}: ${escapeHtml(st)}${r.live?.pingTimeMs ? ` (${r.live.pingTimeMs.toFixed(1)} ms)` : ''}`, ['REGED', 'NOREG'].includes(st) ? 'success' : 'error');
+        loadTrunksTab(true);
+      } catch (err) { showToast(`Falha no teste: ${escapeHtml(err.message)}`, 'error'); }
+    }
+
+    async function toggleTrunk(id) {
+      try {
+        await apiFetch(`/v1/trunks/${encodeURIComponent(id)}/toggle`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+        }).then(jsonOrThrow);
+        loadTrunksTab(true);
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    async function deleteTrunk(id) {
+      if (!confirm(`Excluir o tronco "${id}"? Regras que usam este tronco deixarão de casar.`)) return;
+      try {
+        await apiFetch(`/v1/trunks/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(jsonOrThrow);
+        showToast('Tronco removido', 'success');
+        loadTrunksTab(true);
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    function toggleTrunkAuth() {
+      document.getElementById('trunk-auth-fields').style.display =
+        document.getElementById('trunk-register').checked ? 'block' : 'none';
+    }
+
+    function applyTrunkTemplate() {
+      const tpl = document.getElementById('trunk-template').value;
+      const set = (k, v) => document.getElementById(k).value = v;
+      if (tpl === 'directcall') {
+        set('trunk-proxy', 'sip1.directdial.com.br'); set('trunk-port', 5060);
+        document.getElementById('trunk-register').checked = true;
+        document.getElementById('trunk-provider').value = 'directcall';
+      } else if (tpl === 'ippbx') {
+        document.getElementById('trunk-register').checked = false;
+      }
+      toggleTrunkAuth();
+    }
+
+    function openTrunkModal(id = null) {
+      const sel = document.getElementById('trunk-provider');
+      sel.innerHTML = providersCache.filter(p => p.type === 'sip')
+        .map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || p.id)}</option>`).join('');
+      const t = id ? trunksCache.find(x => x.id === id) : null;
+      const set = (k, v) => document.getElementById(k).value = v ?? '';
+      document.getElementById('trunk-modal-title').textContent = t ? `Editar tronco: ${t.id}` : 'Novo Tronco SIP';
+      set('trunk-template', '');
+      set('trunk-id', t?.id); document.getElementById('trunk-id').disabled = Boolean(t);
+      set('trunk-name', t?.name); set('trunk-proxy', t?.proxy || t?.realm); set('trunk-port', t?.port || 5060);
+      set('trunk-username', t?.username); set('trunk-password', '');
+      set('trunk-direction', t?.direction || 'both'); set('trunk-max', t?.maxChannels || 30);
+      set('trunk-ping', t?.pingFreq || 25); set('trunk-codecs', t?.codecs);
+      if (t?.providerId) sel.value = t.providerId;
+      document.getElementById('trunk-register').checked = Boolean(t?.register);
+      toggleTrunkAuth();
+      openModal('modal-trunk');
+    }
+
+    async function saveTrunk() {
+      const v = k => document.getElementById(k).value.trim();
+      const payload = {
+        id: v('trunk-id').toLowerCase(), name: v('trunk-name') || v('trunk-id'),
+        providerId: v('trunk-provider'), proxy: v('trunk-proxy'), port: parseInt(v('trunk-port'), 10) || 5060,
+        register: document.getElementById('trunk-register').checked,
+        username: v('trunk-username'), direction: v('trunk-direction'),
+        maxChannels: parseInt(v('trunk-max'), 10) || 30, pingFreq: parseInt(v('trunk-ping'), 10) || 25,
+        codecs: v('trunk-codecs') || undefined
+      };
+      const pw = document.getElementById('trunk-password').value;
+      if (pw) payload.password = pw;
+      try {
+        await apiFetch('/v1/trunks', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        }).then(jsonOrThrow);
+        closeModal('modal-trunk');
+        showToast('Tronco aplicado no FreeSWITCH', 'success');
+        loadTrunksTab(true);
+        setTimeout(() => loadTrunksTab(true), 3000);
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    function applyProviderTemplate() {
+      const type = document.getElementById('prov-template').value;
+      document.getElementById('prov-http-fields').style.display = type === 'sip' ? 'none' : 'block';
+      if (type !== 'sip' && !document.getElementById('prov-body').value) {
+        document.getElementById('prov-body').value = '{"to":"{{to}}","from":"{{from}}","message":"{{message}}"}';
+      }
+    }
+
+    function openProviderModal(id = null) {
+      const p = id ? providersCache.find(x => x.id === id) : null;
+      const set = (k, v) => document.getElementById(k).value = v ?? '';
+      set('prov-template', p?.type || 'sip');
+      set('prov-id', p?.id); document.getElementById('prov-id').disabled = Boolean(p);
+      set('prov-name', p?.name);
+      set('prov-url', p?.http?.url); set('prov-method', p?.http?.method || 'POST');
+      set('prov-headers', p?.http?.headers ? JSON.stringify(p.http.headers, null, 2) : '');
+      set('prov-body', p?.http?.bodyTemplate || ''); set('prov-from', p?.http?.from);
+      applyProviderTemplate();
+      openModal('modal-provider');
+    }
+
+    async function saveProvider() {
+      const v = k => document.getElementById(k).value.trim();
+      const type = v('prov-template');
+      const payload = { id: v('prov-id').toLowerCase(), name: v('prov-name') || v('prov-id'), type };
+      if (type !== 'sip') {
+        let headers = {};
+        try { headers = v('prov-headers') ? JSON.parse(v('prov-headers')) : {}; }
+        catch { return showToast('Headers deve ser um JSON válido', 'error'); }
+        payload.http = { url: v('prov-url'), method: v('prov-method'), headers, bodyTemplate: v('prov-body'), from: v('prov-from') };
+      }
+      try {
+        await apiFetch('/v1/providers', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        }).then(jsonOrThrow);
+        closeModal('modal-provider');
+        showToast('Provedor salvo', 'success');
+        loadTrunksTab(true);
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    async function deleteProvider(id) {
+      if (!confirm(`Excluir o provedor "${id}"?`)) return;
+      try {
+        await apiFetch(`/v1/providers/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(jsonOrThrow);
+        loadTrunksTab(true);
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    // ===================== ROTEAMENTO DE AGENTES =====================
+    let routesCache = [];
+    let routeTenants = [];
+
+    async function loadRoutesTab() {
+      try {
+        const [r, t, tr] = await Promise.all([
+          apiFetch('/v1/routes').then(jsonOrThrow),
+          apiFetch('/v1/tenants').then(jsonOrThrow),
+          apiFetch('/v1/trunks').then(jsonOrThrow)
+        ]);
+        routesCache = r.routes; routeTenants = t.tenants; trunksCache = tr.trunks;
+        renderRoutes();
+        fillTestDidList();
+      } catch (err) { showToast(`Erro ao carregar regras: ${escapeHtml(err.message)}`, 'error'); }
+    }
+
+    function renderRoutes() {
+      const body = document.getElementById('routes-table-body');
+      document.getElementById('lbl-routes-summary').textContent = `${routesCache.length} regra(s)`;
+      if (!routesCache.length) {
+        body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px;">Nenhuma regra. Chamadas seguem o mapeamento de DIDs dos agentes.</td></tr>';
+        return;
+      }
+      body.innerHTML = routesCache.map((r, i) => {
+        const id = escapeHtml(r.id);
+        const t = routeTenants.find(x => x.id === r.tenantId);
+        const limit = Math.min(r.maxChannels || Infinity, t?.maxConcurrentCalls || 200);
+        const pol = [];
+        if (r.amdMode && r.amdMode !== 'tenant_default') pol.push(`AMD: ${r.amdMode === 'active' ? 'ativo' : 'off'}`);
+        if (r.bargeinGraceSec !== null && r.bargeinGraceSec !== undefined && r.bargeinGraceSec !== '') pol.push(`Barge-in: ${r.bargeinGraceSec}s`);
+        if (r.recordingEnabled && r.recordingEnabled !== 'tenant_default') pol.push(`Gravação: ${r.recordingEnabled === 'true' || r.recordingEnabled === true ? 'sim' : 'não'}`);
+        return `<tr style="${r.active ? '' : 'opacity:.5;'}">
+          <td style="white-space:nowrap;">${i + 1}
+            <button class="btn btn-sm" onclick="moveRoute('${id}',-1)">⬆</button><button class="btn btn-sm" onclick="moveRoute('${id}',1)">⬇</button></td>
+          <td><strong>${escapeHtml(r.name)}</strong></td>
+          <td>${r.trunkId === '*' || !r.trunkId ? 'Todos' : escapeHtml(r.trunkId)}</td>
+          <td><code>${escapeHtml(r.didPattern)}</code></td>
+          <td><code>${escapeHtml(r.callerPattern)}</code></td>
+          <td>${escapeHtml(t?.name || r.tenantId)}<div style="font-size:11px;color:var(--text-muted);">${escapeHtml(r.tenantId)}</div></td>
+          <td style="font-size:12px;">${pol.length ? pol.map(p => `<span class="tag">${escapeHtml(p)}</span>`).join(' ') : '<span style="color:var(--text-muted);">padrão do agente</span>'}</td>
+          <td style="font-size:12px;">${r.usedChannels || 0}/${limit}</td>
+          <td style="text-align:right;white-space:nowrap;">
+            <button class="btn btn-sm" onclick="toggleRoute('${id}')">${r.active ? '⏸' : '▶'}</button>
+            <button class="btn btn-sm" onclick="openRouteModal('${id}')">✏️</button>
+            <button class="btn btn-sm" onclick="openTenantModal('${escapeHtml(r.tenantId)}')" title="Editar canais do agente">⚙️ Agente</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteRoute('${id}')">🗑️</button></td></tr>`;
+      }).join('');
+    }
+
+    function openRouteModal(id = null) {
+      const r = id ? routesCache.find(x => x.id === id) : null;
+      const set = (k, v) => document.getElementById(k).value = v ?? '';
+      document.getElementById('route-trunk').innerHTML = '<option value="*">Todos os troncos</option>' +
+        trunksCache.map(x => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name || x.id)}</option>`).join('');
+      document.getElementById('route-tenant').innerHTML = routeTenants
+        .map(x => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name || x.id)} (${escapeHtml(x.id)})</option>`).join('');
+      document.getElementById('route-modal-title').textContent = r ? 'Editar Regra' : 'Nova Regra de Roteamento';
+      set('route-id', r?.id); set('route-name', r?.name); set('route-trunk', r?.trunkId || '*');
+      set('route-did', r?.didPattern || '*'); set('route-caller', r?.callerPattern || '*');
+      if (r?.tenantId) set('route-tenant', r.tenantId);
+      set('route-max', r?.maxChannels); set('route-amd', r?.amdMode || 'tenant_default');
+      set('route-grace', r?.bargeinGraceSec); set('route-rec', String(r?.recordingEnabled ?? 'tenant_default'));
+      document.getElementById('route-active').checked = r ? r.active !== false : true;
+      openModal('modal-route');
+    }
+
+    async function saveRoute() {
+      const v = k => document.getElementById(k).value.trim();
+      const id = v('route-id');
+      const payload = {
+        id: id || undefined, name: v('route-name') || 'Regra', trunkId: v('route-trunk'),
+        didPattern: v('route-did') || '*', callerPattern: v('route-caller') || '*', tenantId: v('route-tenant'),
+        maxChannels: v('route-max') ? parseInt(v('route-max'), 10) : null, amdMode: v('route-amd'),
+        bargeinGraceSec: v('route-grace') === '' ? null : Number(v('route-grace')),
+        recordingEnabled: v('route-rec'), active: document.getElementById('route-active').checked
+      };
+      try {
+        await apiFetch('/v1/routes', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        }).then(jsonOrThrow);
+        closeModal('modal-route');
+        showToast('Regra salva', 'success');
+        loadRoutesTab();
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    async function toggleRoute(id) {
+      const r = routesCache.find(x => x.id === id);
+      if (!r) return;
+      try {
+        await apiFetch(`/v1/routes/${encodeURIComponent(id)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !r.active })
+        }).then(jsonOrThrow);
+        loadRoutesTab();
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    async function deleteRoute(id) {
+      if (!confirm('Excluir esta regra?')) return;
+      try {
+        await apiFetch(`/v1/routes/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(jsonOrThrow);
+        loadRoutesTab();
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    async function moveRoute(id, dir) {
+      const ids = routesCache.map(r => r.id);
+      const i = ids.indexOf(id), j = i + dir;
+      if (j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      try {
+        await apiFetch('/v1/routes/reorder', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
+        }).then(jsonOrThrow);
+        loadRoutesTab();
+      } catch (err) { showToast(escapeHtml(err.message), 'error'); }
+    }
+
+    function fillTestDidList() {
+      const sel = document.getElementById('sim-did');
+      const prev = sel.value;
+      const opts = [];
+      routesCache.filter(r => r.active).forEach(r => {
+        opts.push(`<option value="rule:${escapeHtml(r.id)}">Regra: ${escapeHtml(r.name)} (${escapeHtml(r.didPattern)} → ${escapeHtml(r.tenantId)})</option>`);
+      });
+      routeTenants.filter(t => t.active !== false).forEach(t => {
+        (t.dids || []).filter(d => d && d !== '*').forEach(d => {
+          opts.push(`<option value="did:${escapeHtml(d)}">DID ${escapeHtml(d)} → agente ${escapeHtml(t.name || t.id)}</option>`);
+        });
+        if ((t.dids || []).includes('*')) {
+          opts.push(`<option value="tenant:${escapeHtml(t.id)}">Agente padrão: ${escapeHtml(t.name || t.id)}</option>`);
+        }
+      });
+      sel.innerHTML = opts.length ? opts.join('') : '<option value="">Nenhuma regra ou DID cadastrado</option>';
+      if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+    }
+
+    let testPollTimer = null;
+
+    function testLog(msg, kind = 'info') {
+      const wrap = document.getElementById('test-log-wrap');
+      const box = document.getElementById('test-log');
+      wrap.style.display = 'block';
+      const color = { ok: '#34d399', err: '#f87171', ia: '#a78bfa', cli: '#60a5fa', info: 'var(--text-muted)' }[kind] || 'inherit';
+      const t = new Date().toLocaleTimeString('pt-BR');
+      const line = document.createElement('div');
+      line.style.color = color;
+      line.textContent = `[${t}] ${msg}`;
+      box.appendChild(line);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function clearTestLog() {
+      document.getElementById('test-log').innerHTML = '';
+      document.getElementById('test-log-wrap').style.display = 'none';
+    }
+
+    function pollTestCall(callId) {
+      clearInterval(testPollTimer);
+      let seenTurns = 0, openai = false, greeting = null, misses = 0, last = null;
+      const started = Date.now();
+      testPollTimer = setInterval(async () => {
+        try {
+          const resp = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}`);
+          if (resp.status === 404) {
+            if (++misses >= 2) {
+              clearInterval(testPollTimer);
+              const dur = last ? last.durationSec : Math.round((Date.now() - started) / 1000);
+              testLog(`Chamada encerrada (duração ~${dur}s, ${seenTurns} fala(s) transcritas)`, 'ok');
+            }
+            return;
+          }
+          misses = 0;
+          const c = await resp.json();
+          last = c;
+          if (c.openaiConnected && !openai) { openai = true; testLog('IA (OpenAI) conectada à chamada', 'ok'); }
+          if (greeting !== c.isGreetingInProgress) {
+            if (c.isGreetingInProgress) testLog('IA falando a saudação inicial', 'ia');
+            else if (greeting === true) testLog(`Saudação concluída. Barge-in ${c.isBargeinGraceActive ? 'ainda em carência' : 'liberado'}`, 'info');
+            greeting = c.isGreetingInProgress;
+          }
+          const turns = c.transcript || [];
+          for (; seenTurns < turns.length; seenTurns++) {
+            const tr = turns[seenTurns];
+            testLog(`${tr.speaker}: ${tr.text}`, tr.speaker === 'Atendente' ? 'ia' : 'cli');
+          }
+          if (c.isSafetyExpiring) testLog('Limite de duração atingido: encerrando por segurança', 'err');
+        } catch (e) {
+          testLog(`Falha ao consultar a chamada: ${e.message}`, 'err');
+        }
+        if (Date.now() - started > 10 * 60 * 1000) clearInterval(testPollTimer);
+      }, 2000);
+    }
+
+    async function runRealRouteTest() {
+      const choice = document.getElementById('sim-did').value;
+      const to = document.getElementById('sim-to').value.trim();
+      if (!choice || !to) return showToast('Escolha o DID e informe o telefone', 'error');
+      const [kind, ...rest] = choice.split(':');
+      const value = rest.join(':');
+      const payload = { to };
+      if (kind === 'rule') payload.ruleId = value;
+      else if (kind === 'tenant') payload.tenantId = value;
+      else payload.did = value;
+      const label = document.getElementById('sim-did').selectedOptions[0].textContent;
+      const btn = document.getElementById('btn-test-call');
+      btn.disabled = true;
+      clearInterval(testPollTimer);
+      testLog(`Teste iniciado: ${label} → ligar para ${to}`);
+      try {
+        const r = await apiFetch('/v1/routes/test-call', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        }).then(jsonOrThrow);
+        const sim = r.simulation || {};
+        testLog(sim.matchedRule ? `Regra aplicada: ${sim.matchedRule.name}` : 'Nenhuma regra casou: usando o agente do DID/padrão');
+        if (sim.tenant) testLog(`Agente: ${sim.tenant.name || sim.tenant.id} (voz ${sim.tenant.voice || '-'}, modelo ${sim.tenant.model || '-'})`);
+        if (sim.effective) testLog(`Políticas: AMD ${sim.effective.amdEnabled ? 'ativo' : 'desativado'}, barge-in após ${sim.effective.bargeinGraceSec}s, gravação ${sim.effective.recording}`);
+        testLog(`Chamada originada (id ${r.call.callId}) via ${r.call.mediaNode || 'FreeSWITCH'}; atendida pelo destino`, 'ok');
+        showToast(`Ligando para ${escapeHtml(to)}`, 'success');
+        pollTestCall(r.call.callId);
+      } catch (err) {
+        testLog(`Falha: ${err.message}`, 'err');
+        if (/404/.test(err.message)) testLog('Dica: o destino não foi encontrado/atendido (número inválido, sem rota de saída ou tronco indisponível).', 'info');
+        showToast(escapeHtml(err.message), 'error');
+      } finally { btn.disabled = false; }
+    }
+
+    function renderCallTestResult(r) {
+      const box = document.getElementById('sim-result');
+      const t = r?.tenant, e = r?.effective;
+      if (!t || !e) { box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      box.innerHTML = `<div style="font-size:13px;line-height:1.7;">
+        ${r.matchedRule ? `Regra: <strong>${escapeHtml(r.matchedRule.name)}</strong> · ` : ''}Agente: <strong>${escapeHtml(t.name || t.id)}</strong> (${escapeHtml(t.id)}) · voz ${escapeHtml(t.voice || '-')} · modelo ${escapeHtml(t.model || '-')}
+        <br>AMD: ${e.amdEnabled ? 'ativo' : 'desativado'} · Barge-in: ${e.bargeinGraceSec}s · Gravação: ${escapeHtml(String(e.recording))}</div>`;
     }
 
     // Modais Helpers
@@ -3133,7 +3899,60 @@
         .replace(/'/g, '&#39;');
     }
 
+    // Global Floating Tooltip System
+    let globalTipEl = null;
+    function initGlobalTooltips() {
+      if (globalTipEl) return;
+      globalTipEl = document.createElement('div');
+      globalTipEl.className = 'global-floating-tooltip';
+      document.body.appendChild(globalTipEl);
+
+      function positionTooltip(el) {
+        if (!globalTipEl || globalTipEl.style.display !== 'block') return;
+        const rect = el.getBoundingClientRect();
+        const tipRect = globalTipEl.getBoundingClientRect();
+        let top = rect.top - tipRect.height - 8;
+        let left = rect.left + (rect.width / 2) - (tipRect.width / 2);
+
+        if (top < 10) {
+          top = rect.bottom + 8;
+        }
+        if (left < 10) left = 10;
+        if (left + tipRect.width > window.innerWidth - 10) {
+          left = window.innerWidth - tipRect.width - 10;
+        }
+
+        globalTipEl.style.top = `${top + window.scrollY}px`;
+        globalTipEl.style.left = `${left + window.scrollX}px`;
+      }
+
+      document.addEventListener('mouseover', (e) => {
+        const target = e.target.closest('[data-tooltip], [title]');
+        if (!target) return;
+        if (target.hasAttribute('title') && target.getAttribute('title')) {
+          target.setAttribute('data-tooltip', target.getAttribute('title'));
+          target.removeAttribute('title');
+        }
+        const content = target.getAttribute('data-tooltip');
+        if (!content) return;
+        globalTipEl.innerHTML = content;
+        globalTipEl.style.display = 'block';
+        positionTooltip(target);
+      });
+
+      document.addEventListener('mouseout', (e) => {
+        const target = e.target.closest('[data-tooltip]');
+        if (!target) return;
+        if (globalTipEl) globalTipEl.style.display = 'none';
+      });
+
+      window.addEventListener('scroll', () => {
+        if (globalTipEl) globalTipEl.style.display = 'none';
+      }, { passive: true });
+    }
+
     // Inicialização
+    initGlobalTooltips();
     fetchCallsData();
     fetchClusterStatus();
     fetchVoiceFeatures();
