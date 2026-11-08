@@ -244,9 +244,19 @@
     .row-highlight-flash {
       animation: rowFlash 1.8s ease-out;
     }
+    .history-row {
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .history-row:hover {
+      background: rgba(246, 1, 81, 0.05) !important;
+    }
     .history-row-active {
       background: rgba(56, 189, 248, 0.05) !important;
       border-left: 3px solid #38bdf8;
+    }
+    .history-row-active:hover {
+      background: rgba(56, 189, 248, 0.1) !important;
     }
 
     /* Sidebar Navigation */
@@ -773,7 +783,7 @@
     /* Grid Consolidado: Ao Vivo (Esquerda) + Histórico & Logs (Direita) */
     .live-dashboard-split {
       display: grid;
-      grid-template-columns: minmax(350px, 1fr) minmax(460px, 1.35fr);
+      grid-template-columns: minmax(420px, 1.25fr) minmax(440px, 1fr);
       gap: 22px;
       align-items: start;
       margin-top: 8px;
@@ -785,9 +795,10 @@
       min-width: 0;
     }
     .live-col-active .call-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 100%;
     }
     .live-col-history {
       display: flex;
@@ -813,26 +824,194 @@
       }
     }
 
-    /* Card Softphone Formato Quadrado / Clean */
+    /* Card Softphone Horizontal e Compacto */
     .call-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 22px;
+      border-radius: 16px;
+      padding: 16px 18px;
       transition: all 0.25s ease;
       position: relative;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 12px;
       box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+      width: 100%;
     }
     .call-card:hover {
       border-color: var(--border-strong);
-      box-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.12);
+      box-shadow: 0 8px 25px -4px rgba(0, 0, 0, 0.1);
     }
     .call-card.talking {
       border-color: rgba(246, 1, 81, 0.5);
-      box-shadow: 0 0 24px rgba(246, 1, 81, 0.12);
+      box-shadow: 0 0 20px rgba(246, 1, 81, 0.12);
+    }
+
+    /* Topbar do Card */
+    .cc-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .cc-parties-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .sp-call-avatar-sm {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: rgba(246, 1, 81, 0.12);
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .cc-numbers {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      letter-spacing: -0.3px;
+    }
+    .cc-arrow {
+      color: var(--primary);
+      font-size: 14px;
+    }
+    .cc-call-id {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    .cc-status-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Layout do Corpo: Lado Esquerdo (Voz/Features) e Lado Direito (Controles/Ações) */
+    .cc-body-split {
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) minmax(280px, 1.25fr);
+      gap: 14px;
+      align-items: center;
+    }
+    @media (max-width: 860px) {
+      .cc-body-split {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .cc-left-pane {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .cc-left-pane .sp-voice-bar {
+      padding: 8px 12px;
+      border-radius: 10px;
+    }
+    .cc-left-pane .sp-features-bar {
+      gap: 6px;
+    }
+
+    .cc-right-pane {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .cc-actions-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .cc-act-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-main);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .cc-act-btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-strong);
+      transform: translateY(-1px);
+    }
+    .cc-act-btn svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      color: var(--text-main);
+    }
+    .cc-act-btn.active {
+      background: rgba(246, 1, 81, 0.1);
+      border-color: rgba(246, 1, 81, 0.4);
+      color: var(--primary);
+    }
+    .cc-act-btn.active svg {
+      color: var(--primary);
+    }
+    .cc-act-btn.danger-soft {
+      color: var(--primary);
+      background: rgba(246, 1, 81, 0.05);
+      border-color: rgba(246, 1, 81, 0.25);
+    }
+    .cc-act-btn.danger-soft:hover {
+      background: rgba(246, 1, 81, 0.12);
+      border-color: rgba(246, 1, 81, 0.45);
+    }
+
+    .sp-hangup-btn-compact {
+      width: 100%;
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      border-radius: 8px;
+      padding: 7px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #ef4444;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .sp-hangup-btn-compact:hover {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: #ffffff;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+    }
+    .sp-hangup-btn-compact svg {
+      width: 14px;
+      height: 14px;
+      stroke-width: 2.2;
     }
 
     /* Top Row com Ícone Telefone, Chamada em andamento e badge Ao vivo */
@@ -2917,6 +3096,67 @@
     </div>
   </div>
 
+  <!-- MODAL: Configurar Provedor de IA -->
+  <div class="modal-overlay" id="modal-ai-provider-config">
+    <div class="modal-card" style="max-width: 620px;">
+      <div class="modal-header">
+        <h3 style="font-size: 16px; display: flex; align-items: center; gap: 8px;">
+          <span id="aiprov-modal-icon">⚙️</span>
+          <span id="aiprov-modal-title">Configurar Provedor de IA</span>
+        </h3>
+        <button class="btn btn-sm" onclick="closeModal('modal-ai-provider-config')">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+        <input type="hidden" id="aiprov-id">
+
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 8px;">
+          <div>
+            <div style="font-weight: 700; color: var(--text-main);" id="aiprov-status-label">Status do Provedor</div>
+            <div style="font-size: 11px; color: var(--text-muted);">Ativa ou desativa este motor no sistema</div>
+          </div>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+            <input type="checkbox" id="aiprov-active"> Habilitado
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label>Chave de API (API Key)</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="password" id="aiprov-apikey" placeholder="sk-proj-... ou xi-..." style="flex: 1;">
+            <button type="button" class="btn btn-sm" onclick="toggleApiKeyVisibility('aiprov-apikey')">👁️</button>
+          </div>
+          <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;" id="aiprov-key-hint">A chave é armazenada de forma segura no servidor.</small>
+        </div>
+
+        <div class="form-group">
+          <label>Modelo Padrão (Default Model)</label>
+          <select id="aiprov-default-model"></select>
+        </div>
+
+        <div class="form-group" id="group-aiprov-voice">
+          <label>Voz Padrão</label>
+          <select id="aiprov-default-voice"></select>
+        </div>
+
+        <div class="form-group" id="group-aiprov-prompt-id" style="display: none;">
+          <label>OpenAI Prompt ID Padrão</label>
+          <input type="text" id="aiprov-prompt-id" placeholder="pmpt_699c6d29...">
+          <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Prompt gerenciado na dashboard da OpenAI</small>
+        </div>
+
+        <div class="form-group" id="group-aiprov-agent-id" style="display: none;">
+          <label>ElevenLabs Agent ID Padrão</label>
+          <input type="text" id="aiprov-agent-id" placeholder="agent_78abc123xyz...">
+          <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">ID do agente no painel Conversational AI da ElevenLabs</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('modal-ai-provider-config')">Cancelar</button>
+        <button class="btn btn-primary" id="btn-save-aiprov" onclick="saveAiProviderConfig()">💾 Salvar Configurações</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MODAL: Provedor -->
   <div class="modal-overlay" id="modal-provider">
     <div class="modal-card">
@@ -3174,19 +3414,32 @@
     </div>
   </div>
 
-  <!-- MODAL: Ver Transcrição Completa de Gravação -->
-  <div class="modal-overlay" id="modal-transcript-view">
-    <div class="modal-card" style="max-width: 650px;">
-      <div class="modal-header">
-        <h3 style="font-size: 16px;" id="transcript-modal-title">Transcrição da Chamada</h3>
-        <button class="btn btn-sm" onclick="closeModal('modal-transcript-view')">✕</button>
+  <!-- MODAL: Ver Transcrição em Tempo Real / Histórico -->
+  <div class="modal-overlay" id="modal-transcript-view" onclick="if(event.target === this) closeTranscriptModal()">
+    <div class="modal-card" style="max-width: 680px; max-height: 85vh; display: flex; flex-direction: column;">
+      <div class="modal-header" style="display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px; border-bottom: 1px solid var(--border);">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h3 style="font-size: 16px; font-weight: 700; margin: 0; color: var(--text-main);" id="transcript-modal-title">Transcrição da Chamada</h3>
+            <span id="transcript-modal-status-badge" style="display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; background: rgba(56, 189, 248, 0.15); color: #38bdf8;">
+              <span class="dot-online-mini"></span> Tempo Real
+            </span>
+          </div>
+          <div id="transcript-modal-subtitle" style="font-size: 12px; color: var(--text-muted); margin-top: 4px; font-family: monospace;">
+            1000 ➜ 9000 | Tenant: default
+          </div>
+        </div>
+        <button class="btn btn-sm" onclick="closeTranscriptModal()" style="padding: 4px 8px; font-size: 13px;">✕</button>
       </div>
-      <div class="modal-body" style="max-height: 60vh; overflow-y: auto;" id="transcript-modal-body">
+      <div class="modal-body" style="flex: 1; max-height: 60vh; overflow-y: auto; padding: 16px 20px; background: rgba(0,0,0,0.12);" id="transcript-modal-body">
         Carregando...
       </div>
-      <div class="modal-footer">
-        <button class="btn" onclick="copyTranscriptText()">Copiar Texto</button>
-        <button class="btn btn-primary" onclick="closeModal('modal-transcript-view')">Fechar</button>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid var(--border);">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="btn btn-sm" onclick="copyTranscriptText()" title="Copiar texto da transcrição">📋 Copiar Texto</button>
+          <span id="transcript-modal-turns-count" style="font-size: 11px; color: var(--text-muted);">0 falas</span>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="closeTranscriptModal()" style="padding: 6px 16px;">Fechar</button>
       </div>
     </div>
   </div>
@@ -3240,42 +3493,96 @@
           <textarea id="tenant-instructions" rows="7" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.5;" placeholder="Você é um assistente de voz prestativo, ágil e conciso. Fale em português brasileiro de forma amigável..." oninput="updateCharCount()"></textarea>
         </div>
 
-        <!-- Seção 2: Voz, Modelo e Prompt ID -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-          <div class="form-group">
-            <label>OpenAI Prompt ID (Opcional)</label>
-            <input type="text" id="tenant-prompt-id" placeholder="pmpt_699c6d29...">
-            <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Se preenchido, usa o prompt configurado no painel da OpenAI</small>
-          </div>
+        <!-- Seção 2: Motor de Fala-para-Fala (STS Engine) & Voz -->
+        <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+          <h4 style="font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span>🤖 Motor de Fala-para-Fala (STS Engine)</span>
+          </h4>
 
-          <div class="form-group">
-            <label>Voz da IA (OpenAI TTS)</label>
-            <select id="tenant-voice">
-              <option value="alloy">alloy (Neutra / Direta)</option>
-              <option value="echo">echo (Masculina suave)</option>
-              <option value="shimmer">shimmer (Feminina expressiva)</option>
-              <option value="ash">ash (Grave / Calma)</option>
-              <option value="ballad">ballad (Ritmo melódico)</option>
-              <option value="coral">coral (Jovial / Amigável)</option>
-              <option value="sage">sage (Madura / Profissional)</option>
-              <option value="verse">verse (Dinâmica)</option>
-              <option value="marin">marin (Telefônica BR)</option>
-              <option value="cedar">cedar (Profunda)</option>
+          <div class="form-group" style="margin-bottom: 14px;">
+            <label style="font-weight: 700; color: #fff;">Engine de Conversação (Speech-to-Speech):</label>
+            <select id="tenant-sts-engine" onchange="toggleStsEngineFields()">
+              <option value="openai">⚡ OpenAI Realtime (Speech-to-Speech nativo)</option>
+              <option value="elevenlabs">🎙️ ElevenLabs STS (Conversational AI)</option>
             </select>
+            <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Escolha o provedor de IA responsável pelo diálogo em tempo real desta persona.</small>
           </div>
 
-          <div class="form-group">
-            <label>Modelo OpenAI Realtime</label>
-            <select id="tenant-model">
-              <option value="gpt-realtime-2.1-mini">gpt-realtime-2.1-mini (Mais Recente 2.1 / Rápido / Baixa Latência)</option>
-              <option value="gpt-realtime-2.1">gpt-realtime-2.1 (Mais Recente 2.1 / Máxima Capacidade)</option>
-              <option value="gpt-realtime-mini">gpt-realtime-mini (Legado 1.0)</option>
-              <option value="gpt-realtime">gpt-realtime (Legado 1.0)</option>
-            </select>
+          <!-- Campos OpenAI Realtime -->
+          <div id="fields-sts-openai" style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+            <div class="form-group">
+              <label>Modelo OpenAI Realtime</label>
+              <select id="tenant-model">
+                <option value="gpt-realtime-2.1-mini">gpt-realtime-2.1-mini (Mais Recente 2.1 / Rápido / Baixa Latência)</option>
+                <option value="gpt-realtime-2.1">gpt-realtime-2.1 (Mais Recente 2.1 / Máxima Capacidade)</option>
+                <option value="gpt-realtime-mini">gpt-realtime-mini (Legado 1.0)</option>
+                <option value="gpt-realtime">gpt-realtime (Legado 1.0)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label>Voz da IA (OpenAI)</label>
+              <select id="tenant-voice">
+                <option value="marin">marin (Telefônica BR)</option>
+                <option value="alloy">alloy (Neutra / Direta)</option>
+                <option value="echo">echo (Masculina suave)</option>
+                <option value="shimmer">shimmer (Feminina expressiva)</option>
+                <option value="ash">ash (Grave / Calma)</option>
+                <option value="ballad">ballad (Ritmo melódico)</option>
+                <option value="coral">coral (Jovial / Amigável)</option>
+                <option value="sage">sage (Madura / Profissional)</option>
+                <option value="verse">verse (Dinâmica)</option>
+                <option value="cedar">cedar (Profunda)</option>
+              </select>
+            </div>
+
+            <div class="form-group" style="grid-column: span 2;">
+              <label>OpenAI Prompt ID (Opcional)</label>
+              <input type="text" id="tenant-prompt-id" placeholder="pmpt_699c6d29...">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Se preenchido, sincroniza o prompt configurado no painel da OpenAI</small>
+            </div>
           </div>
 
-          <div class="form-group">
-            <label>Codec de Áudio</label>
+          <!-- Campos ElevenLabs STS -->
+          <div id="fields-sts-elevenlabs" style="display: none; grid-template-columns: 1fr 1fr; gap: 14px;">
+            <div class="form-group">
+              <label>ElevenLabs Agent ID <span style="color:var(--danger)">*</span></label>
+              <input type="text" id="tenant-eleven-agent-id" placeholder="ex: agent_78abc123xyz...">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">ID do agente no painel Conversational AI da ElevenLabs</small>
+            </div>
+
+            <div class="form-group">
+              <label>Modelo ElevenLabs</label>
+              <select id="tenant-eleven-model">
+                <option value="eleven_turbo_v2_5">eleven_turbo_v2_5 (Ultrabaixa Latência / Alta Qualidade)</option>
+                <option value="eleven_multilingual_v2">eleven_multilingual_v2 (Multilíngue Completo)</option>
+                <option value="eleven_flash_v2_5">eleven_flash_v2_5 (Máxima Velocidade)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label>Voz ElevenLabs</label>
+              <select id="tenant-eleven-voice">
+                <option value="Rachel">Rachel (Feminina Serena)</option>
+                <option value="Aria">Aria (Expressiva / Dinâmica)</option>
+                <option value="Roger">Roger (Masculina Firme)</option>
+                <option value="Sarah">Sarah (Jovial e Clara)</option>
+                <option value="Laura">Laura (Profissional Acolhedora)</option>
+                <option value="Charlie">Charlie (Masculina Amigável)</option>
+                <option value="George">George (Narrativa Clara)</option>
+                <option value="Callum">Callum (Moderna)</option>
+                <option value="Custom">Custom (ID Próprio)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label>Chave API ElevenLabs (Opcional por Tenant)</label>
+              <input type="password" id="tenant-eleven-apikey" placeholder="Usar padrão global ou xi-...">
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 14px;">
+            <label>Codec de Áudio Telefônico</label>
             <select id="tenant-codec">
               <option value="g711_ulaw">G.711 u-law (Nativo Telefonia - Zero Latência)</option>
               <option value="pcm24k">PCM 24kHz (Alta Fidelidade com Resampling)</option>
@@ -4056,138 +4363,130 @@
 
           return `
             <div class="call-card ${isAgentSpeaking ? 'talking' : ''}" id="card-${c.callId}">
-              <!-- Linha 1: Avatar Telefone + "Chamada em andamento" + Badge "Ao vivo" + Timer -->
-              <div class="sp-header">
-                <div class="sp-header-left">
-                  <div class="sp-call-avatar">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+              <!-- Linha 1: Topbar compacta com Avatar, Caller ➜ Called, Tenant, ID, Ao Vivo e Timer -->
+              <div class="cc-topbar">
+                <div class="cc-parties-wrap">
+                  <div class="sp-call-avatar-sm">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
                   </div>
-                  <div>
-                    <div class="sp-header-title-box">
-                      <span class="sp-header-title">Chamada em andamento</span>
-                      <span class="sp-live-pill"><span class="sp-live-dot"></span> Ao vivo</span>
+                  <div class="cc-numbers">
+                    <span>${escapeHtml(c.caller || '1000')}</span>
+                    <span class="cc-arrow">➜</span>
+                    <span>${escapeHtml(c.called || '1234')}</span>
+                  </div>
+                  <span class="sp-tenant-badge">${escapeHtml(c.tenantId || 'default')}</span>
+                  <span class="cc-call-id" title="${escapeHtml(c.callId)}">ID: ${escapeHtml(String(c.callId).slice(0, 10))}...</span>
+                </div>
+
+                <div class="cc-status-wrap">
+                  <span class="sp-live-pill"><span class="sp-live-dot"></span> Ao vivo</span>
+                  <span class="sp-timer-badge">${formatDuration(c.durationSec || 0)}</span>
+                </div>
+              </div>
+
+              <!-- Linha 2: Split Horizontal (Lado Esquerdo: Voz/Features | Lado Direito: Ações) -->
+              <div class="cc-body-split">
+                <!-- Lado Esquerdo: Áudio & Features -->
+                <div class="cc-left-pane">
+                  <!-- Status da Voz / IA -->
+                  <div class="sp-voice-bar">
+                    <div class="sp-voice-status">
+                      ${speechIcon}
+                      <span>${speechText}</span>
+                    </div>
+                    <div class="sp-waveform ${isAgentSpeaking ? 'active' : ''}">
+                      <span class="sp-wave-bar"></span>
+                      <span class="sp-wave-bar"></span>
+                      <span class="sp-wave-bar"></span>
+                      <span class="sp-wave-bar"></span>
+                      <span class="sp-wave-bar"></span>
+                      <span class="sp-wave-bar"></span>
+                    </div>
+                  </div>
+
+                  <!-- Features Chips & Carência -->
+                  <div class="sp-features-bar">
+                    <div class="sp-pills-group">
+                      <span class="sp-pill ${isAecOn ? 'on' : ''}"><span class="dot"></span> AEC</span>
+                      <span class="sp-pill ${isDspOn ? 'on' : ''}"><span class="dot"></span> DSP</span>
+                      <span class="sp-pill ${isRec ? 'on' : (c.recordingPaused ? 'warn' : '')}"><span class="dot"></span> Gravação</span>
+                      <span class="sp-pill ${isSttOn ? 'on' : ''}"><span class="dot"></span> STT</span>
+                      <span class="sp-pill ${isAmdOn ? 'on' : ''}"><span class="dot"></span> AMD</span>
+                    </div>
+                    <div class="sp-pill-time">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      <span>Carência: <span class="highlight-time">${graceSec}s</span></span>
                     </div>
                   </div>
                 </div>
-                <div class="sp-timer-badge">
-                  ${formatDuration(c.durationSec || 0)}
-                </div>
-              </div>
 
-              <!-- Linha 2: ID + Partes (Caller -> Called) + Dropdown Tenant -->
-              <div>
-                <div class="sp-id-text">ID: ${escapeHtml(c.callId)}</div>
-                <div class="sp-parties-row">
-                  <div class="sp-parties-numbers">
-                    <span>${escapeHtml(c.caller || '1000')}</span>
-                    <span class="arrow">➜</span>
-                    <span>${escapeHtml(c.called || '1234')}</span>
+                <!-- Lado Direito: Grid de Botões de Ação + Desligar -->
+                <div class="cc-right-pane">
+                  <div class="cc-actions-grid">
+                    <!-- DTMF -->
+                    <button class="cc-act-btn" onclick="openDtmfModal('${escapeHtml(c.callId)}')" title="Teclado numérico DTMF">
+                      <svg viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="5" cy="5" r="2.2"/><circle cx="12" cy="5" r="2.2"/><circle cx="19" cy="5" r="2.2"/>
+                        <circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/>
+                        <circle cx="5" cy="19" r="2.2"/><circle cx="12" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/>
+                      </svg>
+                      <span>DTMF</span>
+                    </button>
+
+                    <!-- Mute -->
+                    <button class="cc-act-btn ${isMuted ? 'active' : ''}" onclick="toggleMute('${escapeHtml(c.callId)}', ${!isMuted})" title="${isMuted ? 'Desmutar Microfone' : 'Mutar Microfone'}">
+                      ${isMuted ? `
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                      ` : `
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                      `}
+                      <span>${isMuted ? 'Desmutar' : 'Mute'}</span>
+                    </button>
+
+                    <!-- Hold -->
+                    <button class="cc-act-btn ${isOnHold ? 'active' : ''}" onclick="toggleHold('${escapeHtml(c.callId)}', ${!isOnHold})" title="${isOnHold ? 'Retomar Chamada' : 'Colocar em Espera'}">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                      <span>${isOnHold ? 'Retomar' : 'Hold'}</span>
+                    </button>
+
+                    <!-- Transferir -->
+                    <button class="cc-act-btn" onclick="openTransferModal('${escapeHtml(c.callId)}')" title="Transferir Chamada">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>
+                      <span>Transferir</span>
+                    </button>
+
+                    <!-- Falar -->
+                    <button class="cc-act-btn" onclick="openSayModal('${escapeHtml(c.callId)}')" title="Injetar fala ou texto">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      <span>Falar</span>
+                    </button>
+
+                    <!-- Parar IA -->
+                    <button class="cc-act-btn danger-soft" onclick="triggerInterrupt('${escapeHtml(c.callId)}')" title="Interromper fala da IA (Barge-in)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>
+                      <span>Parar IA</span>
+                    </button>
+
+                    <!-- Transcrição -->
+                    <button class="cc-act-btn" onclick="openTranscriptModalForCall('${escapeHtml(c.callId)}')" title="Ver Transcrição em Tempo Real">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" x2="17" y1="8" y2="8"/><line x1="7" x2="17" y1="12" y2="12"/><line x1="7" x2="13" y1="16" y2="16"/></svg>
+                      <span>Transcrição</span>
+                    </button>
+
+                    <!-- Pausar (Gravação) -->
+                    <button class="cc-act-btn" onclick="toggleRecording('${escapeHtml(c.callId)}', '${isRec ? 'pause' : 'resume'}')" title="${isRec ? 'Pausar Gravação' : 'Retomar Gravação'}">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="8" y1="6" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="18"/></svg>
+                      <span>${isRec ? 'Pausar' : 'Gravar'}</span>
+                    </button>
                   </div>
-                  <div class="sp-tenant-badge">
-                    <span>${escapeHtml(c.tenantId)}</span>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-                  </div>
+
+                  <!-- Botão Desligar Horizontal -->
+                  <button class="sp-hangup-btn-compact" onclick="triggerHangup('${escapeHtml(c.callId)}')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                    <span>Desligar Chamada</span>
+                  </button>
                 </div>
               </div>
-
-              <!-- Linha 3: Barra de Status de Voz com Waveform Animado -->
-              <div class="sp-voice-bar">
-                <div class="sp-voice-status">
-                  ${speechIcon}
-                  <span>${speechText}</span>
-                </div>
-                <div class="sp-waveform ${isAgentSpeaking ? 'active' : ''}">
-                  <span class="sp-wave-bar"></span>
-                  <span class="sp-wave-bar"></span>
-                  <span class="sp-wave-bar"></span>
-                  <span class="sp-wave-bar"></span>
-                  <span class="sp-wave-bar"></span>
-                  <span class="sp-wave-bar"></span>
-                </div>
-              </div>
-
-              <!-- Linha 4: Features com Indicadores de Ponto Verde/Cinza e Carência -->
-              <div class="sp-features-bar">
-                <div class="sp-pills-group">
-                  <span class="sp-pill ${isAecOn ? 'on' : ''}"><span class="dot"></span> AEC</span>
-                  <span class="sp-pill ${isDspOn ? 'on' : ''}"><span class="dot"></span> DSP</span>
-                  <span class="sp-pill ${isRec ? 'on' : (c.recordingPaused ? 'warn' : '')}"><span class="dot"></span> Gravação</span>
-                  <span class="sp-pill ${isSttOn ? 'on' : ''}"><span class="dot"></span> STT</span>
-                  <span class="sp-pill ${isAmdOn ? 'on' : ''}"><span class="dot"></span> AMD</span>
-                </div>
-                <div class="sp-pill-time">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                  <span>Carência: <span class="highlight-time">${graceSec}s</span></span>
-                </div>
-              </div>
-
-              <!-- Linha 5: Grid Softphone Quadrado (DTMF, Mute, Hold, Transferir) -->
-              <div class="sp-grid-quadrado">
-                <!-- 1. DTMF -->
-                <div class="sp-btn-box" onclick="openDtmfModal('${escapeHtml(c.callId)}')" title="Teclado numérico DTMF">
-                  <svg viewBox="0 0 24 24" fill="currentColor">
-                    <circle cx="5" cy="5" r="2.2"/><circle cx="12" cy="5" r="2.2"/><circle cx="19" cy="5" r="2.2"/>
-                    <circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/>
-                    <circle cx="5" cy="19" r="2.2"/><circle cx="12" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/>
-                  </svg>
-                  <span>DTMF</span>
-                </div>
-
-                <!-- 2. Mute -->
-                <div class="sp-btn-box ${isMuted ? 'active' : ''}" onclick="toggleMute('${escapeHtml(c.callId)}', ${!isMuted})" title="${isMuted ? 'Desmutar Microfone' : 'Mutar Microfone'}">
-                  ${isMuted ? `
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="2" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-                  ` : `
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-                  `}
-                  <span>Mute</span>
-                </div>
-
-                <!-- 3. Hold -->
-                <div class="sp-btn-box ${isOnHold ? 'active' : ''}" onclick="toggleHold('${escapeHtml(c.callId)}', ${!isOnHold})" title="${isOnHold ? 'Retomar Chamada' : 'Colocar em Espera'}">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
-                  <span>Hold</span>
-                </div>
-
-                <!-- 4. Transferir -->
-                <div class="sp-btn-box" onclick="openTransferModal('${escapeHtml(c.callId)}')" title="Transferir Chamada">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>
-                  <span>Transferir</span>
-                </div>
-              </div>
-
-              <!-- Linha 6: Sub-botões Auxiliares (Falar, Parar IA, Transcrição, Pausar) -->
-              <div class="sp-grid-sub">
-                <!-- Falar -->
-                <div class="sp-btn-sub" onclick="openSayModal('${escapeHtml(c.callId)}')" title="Injetar fala ou texto">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  <span>Falar</span>
-                </div>
-
-                <!-- Parar IA -->
-                <div class="sp-btn-sub danger-soft" onclick="triggerInterrupt('${escapeHtml(c.callId)}')" title="Interromper fala da IA (Barge-in)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>
-                  <span>Parar IA</span>
-                </div>
-
-                <!-- Transcrição (Abre o Drawer lateral com a conversa completa) -->
-                <div class="sp-btn-sub" onclick="openLiveDrawer('${escapeHtml(c.callId)}')" title="Abrir painel lateral de transcrição completa">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" x2="17" y1="8" y2="8"/><line x1="7" x2="17" y1="12" y2="12"/><line x1="7" x2="13" y1="16" y2="16"/></svg>
-                  <span>Transcrição</span>
-                </div>
-
-                <!-- Pausar (Gravação) -->
-                <div class="sp-btn-sub" onclick="toggleRecording('${escapeHtml(c.callId)}', '${isRec ? 'pause' : 'resume'}')" title="${isRec ? 'Pausar Gravação' : 'Retomar Gravação'}">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="8" y1="6" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="18"/></svg>
-                  <span>Pausar</span>
-                </div>
-              </div>
-
-              <!-- Linha 7: Botão Desligar Chamada com Borda Vermelha -->
-              <button class="sp-hangup-btn" onclick="triggerHangup('${escapeHtml(c.callId)}')">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
-                <span>Desligar Chamada</span>
-              </button>
             </div>
           `;
         }).join('');
@@ -4852,7 +5151,7 @@
         : `<span style="font-size: 11.5px; font-weight: 600; color: ${reasonColor}; white-space: nowrap;">${escapeHtml(c.hangupReason || 'normal_hangup')}</span>`;
 
       return `
-        <tr id="history-row-${escapeHtml(c.callId)}" data-call-id="${escapeHtml(c.callId)}" class="history-row ${c.isActive ? 'history-row-active' : ''}">
+        <tr id="history-row-${escapeHtml(c.callId)}" data-call-id="${escapeHtml(c.callId)}" class="history-row ${c.isActive ? 'history-row-active' : ''}" onclick="openTranscriptModalForCall('${escapeHtml(c.callId)}', event)" title="Clique para ver a transcrição em tempo real">
           <td style="white-space: nowrap;">
             <div style="font-weight: 600; font-size: 12px;">${escapeHtml(dateStr)}</div>
             <div style="font-size: 10px; color: var(--text-muted); font-family: monospace;" title="${escapeHtml(c.callId)}">${escapeHtml(String(c.callId).slice(0, 12))}...</div>
@@ -4872,13 +5171,13 @@
           <td>${statusHtml}</td>
           <td class="history-transcript-cell" style="white-space: nowrap;">
             ${turnsCount > 0 ? `
-              <button class="btn btn-sm btn-primary" style="padding: 2px 7px; font-size: 11px;" onclick="viewHistoryTranscript('${escapeHtml(c.callId)}')">
+              <button class="btn btn-sm btn-primary" style="padding: 2px 7px; font-size: 11px;" onclick="event.stopPropagation(); openTranscriptModalForCall('${escapeHtml(c.callId)}')">
                 📜 ${turnsCount} falas
               </button>
             ` : '<span style="color: var(--text-dim); font-size: 11px;">-</span>'}
           </td>
           <td style="text-align: right; white-space: nowrap;">
-            <button class="btn btn-sm" style="padding: 2px 7px; font-size: 11px;" onclick="viewCallDetails('${escapeHtml(c.callId)}')" title="Ver Detalhes do Log">
+            <button class="btn btn-sm" style="padding: 2px 7px; font-size: 11px;" onclick="event.stopPropagation(); viewCallDetails('${escapeHtml(c.callId)}')" title="Ver Detalhes do Log">
               🔍 Detalhes
             </button>
           </td>
@@ -4973,6 +5272,10 @@
         currentHistoryList[idx] = { ...currentHistoryList[idx], ...call };
       }
 
+      if (activeTranscriptModalCallId && activeTranscriptModalCallId === call.callId) {
+        refreshActiveTranscriptModal();
+      }
+
       const row = document.getElementById('history-row-' + call.callId);
       if (!row) return;
 
@@ -4988,7 +5291,7 @@
         const turnCell = row.querySelector('.history-transcript-cell');
         if (turnCell) {
           turnCell.innerHTML = `
-            <button class="btn btn-sm btn-primary" onclick="viewHistoryTranscript('${escapeHtml(call.callId)}')">
+            <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openTranscriptModalForCall('${escapeHtml(call.callId)}')">
               📜 ${call.transcriptTurnsCount} falas
             </button>
           `;
@@ -5003,6 +5306,10 @@
       } else {
         currentHistoryList.unshift({ ...call, isActive: false });
         if (currentHistoryList.length > 100) currentHistoryList.pop();
+      }
+
+      if (activeTranscriptModalCallId && activeTranscriptModalCallId === call.callId) {
+        refreshActiveTranscriptModal();
       }
 
       updateHistoryCounters();
@@ -5125,31 +5432,219 @@
       renderHistoryTable(filtered);
     }
 
+    let activeTranscriptModalCallId = null;
+    let activeTranscriptModalTimer = null;
+
+    function closeTranscriptModal() {
+      if (activeTranscriptModalTimer) {
+        clearInterval(activeTranscriptModalTimer);
+        activeTranscriptModalTimer = null;
+      }
+      activeTranscriptModalCallId = null;
+      closeModal('modal-transcript-view');
+    }
+
     function viewHistoryTranscript(callId) {
-      const call = currentHistoryList.find(c => c.callId === callId);
-      if (!call || !call.transcript || call.transcript.length === 0) {
-        showToast('Nenhuma transcrição encontrada para esta chamada', 'info');
+      openTranscriptModalForCall(callId);
+    }
+
+    async function openTranscriptModalForCall(callId, event) {
+      if (event && event.target) {
+        if (event.target.closest('button[title*="Detalhes"]') || event.target.closest('a')) {
+          return;
+        }
+      }
+
+      if (!callId) return;
+      activeTranscriptModalCallId = callId;
+
+      if (activeTranscriptModalTimer) {
+        clearInterval(activeTranscriptModalTimer);
+        activeTranscriptModalTimer = null;
+      }
+
+      const titleEl = document.getElementById('transcript-modal-title');
+      const subEl = document.getElementById('transcript-modal-subtitle');
+      const badgeEl = document.getElementById('transcript-modal-status-badge');
+      const turnsCountEl = document.getElementById('transcript-modal-turns-count');
+      const bodyEl = document.getElementById('transcript-modal-body');
+
+      let call = (typeof currentHistoryList !== 'undefined' ? currentHistoryList.find(c => c.callId === callId) : null)
+        || (typeof cachedCalls !== 'undefined' ? cachedCalls.find(c => c.callId === callId) : null);
+
+      if (titleEl) titleEl.textContent = `Transcrição: ${String(callId).slice(0, 16)}...`;
+      if (subEl) {
+        const caller = call ? (call.caller || 'Desc') : '--';
+        const called = call ? (call.called || '1000') : '--';
+        const tenant = call ? (call.tenantId || 'default') : 'default';
+        subEl.textContent = `${caller} ➜ ${called} | Tenant: ${tenant}`;
+      }
+
+      const isActive = Boolean(call && call.isActive);
+      if (badgeEl) {
+        if (isActive) {
+          badgeEl.style.display = 'inline-flex';
+          badgeEl.style.background = 'rgba(56, 189, 248, 0.15)';
+          badgeEl.style.color = '#38bdf8';
+          badgeEl.innerHTML = '<span class="dot-online-mini"></span> Ao Vivo (Tempo Real)';
+        } else {
+          badgeEl.style.display = 'inline-flex';
+          badgeEl.style.background = 'rgba(100, 116, 139, 0.15)';
+          badgeEl.style.color = 'var(--text-muted)';
+          badgeEl.innerHTML = 'Chamada Finalizada';
+        }
+      }
+
+      if (turnsCountEl) {
+        turnsCountEl.textContent = 'Carregando...';
+      }
+
+      if (bodyEl) {
+        bodyEl.innerHTML = `
+          <div style="text-align: center; color: var(--text-muted); padding: 30px;">
+            <div style="font-size: 24px; margin-bottom: 6px;">⏳</div>
+            <div>Carregando transcrição...</div>
+          </div>
+        `;
+      }
+
+      openModal('modal-transcript-view');
+
+      // Executa o primeiro carregamento
+      await refreshActiveTranscriptModal();
+
+      // Se a chamada estiver ativa, inicia polling de 1s para tempo real contínuo
+      if (isActive || (call && call.isActive)) {
+        activeTranscriptModalTimer = setInterval(refreshActiveTranscriptModal, 1000);
+      }
+    }
+
+    async function refreshActiveTranscriptModal() {
+      if (!activeTranscriptModalCallId) return;
+      const callId = activeTranscriptModalCallId;
+      const bodyEl = document.getElementById('transcript-modal-body');
+      const badgeEl = document.getElementById('transcript-modal-status-badge');
+      const turnsCountEl = document.getElementById('transcript-modal-turns-count');
+
+      // 1. Tenta buscar endpoint de tempo real da chamada ativa
+      try {
+        const res = await apiFetch(`/v1/calls/${encodeURIComponent(callId)}/transcript`);
+        if (res.ok) {
+          const data = await res.json();
+          const turns = data.transcript || [];
+          if (activeTranscriptModalCallId !== callId) return;
+          
+          if (badgeEl) {
+            badgeEl.style.display = 'inline-flex';
+            badgeEl.style.background = 'rgba(56, 189, 248, 0.15)';
+            badgeEl.style.color = '#38bdf8';
+            badgeEl.innerHTML = '<span class="dot-online-mini"></span> Ao Vivo (Tempo Real)';
+          }
+          if (turnsCountEl) {
+            turnsCountEl.textContent = `${turns.length} fala(s)`;
+          }
+
+          renderTranscriptModalTurns(turns);
+          return;
+        }
+      } catch (e) {
+        // Fallback para histórico
+      }
+
+      // 2. Se a chamada não está mais ativa no gateway, cancela polling
+      if (activeTranscriptModalTimer) {
+        clearInterval(activeTranscriptModalTimer);
+        activeTranscriptModalTimer = null;
+      }
+
+      if (badgeEl) {
+        badgeEl.style.display = 'inline-flex';
+        badgeEl.style.background = 'rgba(100, 116, 139, 0.15)';
+        badgeEl.style.color = 'var(--text-muted)';
+        badgeEl.innerHTML = 'Chamada Finalizada';
+      }
+
+      // 3. Busca dos dados em memória de histórico (currentHistoryList)
+      let call = (typeof currentHistoryList !== 'undefined' ? currentHistoryList.find(c => c.callId === callId) : null);
+      if (call && Array.isArray(call.transcript) && call.transcript.length > 0) {
+        if (turnsCountEl) turnsCountEl.textContent = `${call.transcript.length} fala(s)`;
+        renderTranscriptModalTurns(call.transcript);
         return;
       }
-      document.getElementById('transcript-modal-title').textContent = `Transcrição: ${callId}`;
-      const body = document.getElementById('transcript-modal-body');
-      currentRawTranscriptText = call.transcript.map(t => t.formatted || `[${t.timestamp}] ${t.speaker}: ${t.text}`).join('\n');
 
-      body.innerHTML = call.transcript.map(t => {
-        const isClient = t.speaker === 'Cliente';
+      // 4. Se não tem em call.transcript mas tem gravação associada, busca gravação
+      if (call && (call.recordingFile || call.transcriptFile)) {
+        const baseName = (call.recordingFile || call.transcriptFile || '').replace(/\.(wav|txt)$/i, '');
+        try {
+          const rRes = await apiFetch(`/v1/recordings/${encodeURIComponent(baseName)}/transcript`);
+          if (rRes.ok) {
+            const rData = await rRes.json();
+            const turns = rData.turns || [];
+            if (turns.length > 0) {
+              if (turnsCountEl) turnsCountEl.textContent = `${turns.length} fala(s)`;
+              renderTranscriptModalTurns(turns);
+              return;
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 5. Caso não haja falas registradas
+      if (bodyEl) {
+        bodyEl.innerHTML = `
+          <div style="text-align: center; color: var(--text-muted); padding: 40px 20px;">
+            <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.7;">💬</div>
+            <div style="font-weight: 600; font-size: 13.5px; color: var(--text-main);">Nenhuma fala gravada nesta chamada</div>
+            <div style="font-size: 12px; margin-top: 4px;">A chamada pode ter sido curta, não ter alcançado o atendente IA ou o áudio não foi transcrito.</div>
+          </div>
+        `;
+      }
+      if (turnsCountEl) turnsCountEl.textContent = '0 falas';
+    }
+
+    function renderTranscriptModalTurns(turns) {
+      const bodyEl = document.getElementById('transcript-modal-body');
+      if (!bodyEl) return;
+
+      if (!turns || turns.length === 0) {
+        bodyEl.innerHTML = `
+          <div style="text-align: center; color: var(--text-muted); padding: 36px 20px;">
+            <div style="font-size: 28px; margin-bottom: 8px;">⏳</div>
+            <div style="font-weight: 600; font-size: 13px; color: var(--text-main);">Aguardando primeira fala...</div>
+            <div style="font-size: 12px; margin-top: 4px;">As falas aparecerão aqui assim que forem detectadas.</div>
+          </div>
+        `;
+        return;
+      }
+
+      currentRawTranscriptText = turns.map(t => t.formatted || `[${t.timestamp || ''}] ${t.speaker}: ${t.text}`).join('\n');
+
+      const isNearBottom = (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 70;
+
+      bodyEl.innerHTML = turns.map(t => {
+        const isClient = t.speaker === 'Cliente' || t.speaker === 'user';
         const icon = isClient ? '👤' : '🤖';
-        const color = isClient ? '#34d399' : '#60a5fa';
+        const speakerName = isClient ? 'Cliente' : 'Atendente IA';
+        const badgeColor = isClient ? '#10b981' : '#38bdf8';
+        const bubbleBg = isClient ? 'rgba(16, 185, 129, 0.08)' : 'rgba(56, 189, 248, 0.08)';
+        const bubbleBorder = isClient ? 'rgba(16, 185, 129, 0.25)' : 'rgba(56, 189, 248, 0.25)';
+
         return `
-          <div style="margin-bottom: 12px; padding: 10px 14px; background: rgba(255,255,255,0.03); border-radius: 8px; border-left: 3px solid ${color};">
-            <div style="font-size: 11px; color: ${color}; font-weight: 700; margin-bottom: 4px;">
-              ${icon} ${escapeHtml(t.speaker)} <span style="opacity: 0.7; font-weight: normal; margin-left: 8px;">${escapeHtml(t.timestamp || '')}</span>
+          <div style="margin-bottom: 12px; padding: 10px 14px; background: ${bubbleBg}; border: 1px solid ${bubbleBorder}; border-radius: 8px; border-left: 4px solid ${badgeColor};">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+              <span style="font-size: 11.5px; color: ${badgeColor}; font-weight: 700; display: inline-flex; align-items: center; gap: 5px;">
+                ${icon} ${escapeHtml(speakerName)}
+              </span>
+              <span style="font-size: 10.5px; color: var(--text-muted); font-family: monospace;">${escapeHtml(t.timestamp || '')}</span>
             </div>
-            <div style="font-size: 13px; line-height: 1.5;">${escapeHtml(t.text)}</div>
+            <div style="font-size: 13px; line-height: 1.5; color: var(--text-main); word-break: break-word;">${escapeHtml(t.text)}</div>
           </div>
         `;
       }).join('');
 
-      openModal('modal-transcript-view');
+      if (isNearBottom) {
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+      }
     }
 
     function viewCallDetails(callId) {
@@ -5268,6 +5763,19 @@
       }
     }
 
+    function toggleStsEngineFields() {
+      const engine = document.getElementById('tenant-sts-engine')?.value || 'openai';
+      const oaiBox = document.getElementById('fields-sts-openai');
+      const elevenBox = document.getElementById('fields-sts-elevenlabs');
+      if (engine === 'elevenlabs') {
+        if (oaiBox) oaiBox.style.display = 'none';
+        if (elevenBox) elevenBox.style.display = 'grid';
+      } else {
+        if (oaiBox) oaiBox.style.display = 'grid';
+        if (elevenBox) elevenBox.style.display = 'none';
+      }
+    }
+
     function openTenantModal(tenantId = null) {
       const idInput = document.getElementById('tenant-id');
       const nameInput = document.getElementById('tenant-name');
@@ -5284,6 +5792,11 @@
       const amdCheck = document.getElementById('tenant-amd');
       const sttCheck = document.getElementById('tenant-stt');
       const titleEl = document.getElementById('tenant-modal-title');
+      const stsEngineSelect = document.getElementById('tenant-sts-engine');
+      const elevenAgentInput = document.getElementById('tenant-eleven-agent-id');
+      const elevenModelSelect = document.getElementById('tenant-eleven-model');
+      const elevenVoiceSelect = document.getElementById('tenant-eleven-voice');
+      const elevenApiKeyInput = document.getElementById('tenant-eleven-apikey');
 
       if (tenantId) {
         const t = cachedTenantsList.find(item => item.id === tenantId) || {};
@@ -5311,6 +5824,12 @@
         amdCheck.checked = !!t.amd?.enabled;
         sttCheck.checked = t.stt?.enabled !== false;
 
+        if (stsEngineSelect) stsEngineSelect.value = t.stsEngine || 'openai';
+        if (elevenAgentInput) elevenAgentInput.value = t.elevenlabsAgentId || '';
+        if (elevenModelSelect) elevenModelSelect.value = t.elevenlabsModel || 'eleven_turbo_v2_5';
+        if (elevenVoiceSelect) elevenVoiceSelect.value = t.elevenlabsVoiceId || 'Rachel';
+        if (elevenApiKeyInput) elevenApiKeyInput.value = t.elevenlabsApiKey || '';
+
         const xtalkMode = t.crosstalkFilter?.mode || (t.crosstalkMode || 'atual');
         document.getElementById('tenant-crosstalk-mode').value = xtalkMode;
         document.getElementById('tenant-crosstalk-threshold').value = t.crosstalkFilter?.threshold ?? '';
@@ -5333,11 +5852,19 @@
         activeCheck.checked = true;
         amdCheck.checked = false;
         sttCheck.checked = true;
+
+        if (stsEngineSelect) stsEngineSelect.value = 'openai';
+        if (elevenAgentInput) elevenAgentInput.value = '';
+        if (elevenModelSelect) elevenModelSelect.value = 'eleven_turbo_v2_5';
+        if (elevenVoiceSelect) elevenVoiceSelect.value = 'Rachel';
+        if (elevenApiKeyInput) elevenApiKeyInput.value = '';
+
         document.getElementById('tenant-crosstalk-mode').value = 'atual';
         document.getElementById('tenant-crosstalk-threshold').value = '';
         document.getElementById('tenant-crosstalk-ratio').value = 0.45;
       }
 
+      toggleStsEngineFields();
       updateCharCount();
       openModal('modal-tenant-editor');
     }
@@ -5353,9 +5880,14 @@
       const rawDids = document.getElementById('tenant-dids').value.trim();
       const dids = rawDids ? rawDids.split(',').map(s => s.trim()).filter(Boolean) : ['*'];
       const instructions = document.getElementById('tenant-instructions').value.trim();
+      const stsEngine = document.getElementById('tenant-sts-engine')?.value || 'openai';
       const openaiPromptId = document.getElementById('tenant-prompt-id').value.trim() || null;
       const voice = document.getElementById('tenant-voice').value;
       const openaiModel = document.getElementById('tenant-model').value;
+      const elevenlabsAgentId = document.getElementById('tenant-eleven-agent-id')?.value.trim() || null;
+      const elevenlabsModel = document.getElementById('tenant-eleven-model')?.value || 'eleven_turbo_v2_5';
+      const elevenlabsVoiceId = document.getElementById('tenant-eleven-voice')?.value || 'Rachel';
+      const elevenlabsApiKey = document.getElementById('tenant-eleven-apikey')?.value.trim() || null;
       const audioCodec = document.getElementById('tenant-codec').value;
       const maxConcurrentCalls = parseInt(document.getElementById('tenant-max-calls').value, 10) || 200;
       const maxCallsPerSecond = parseInt(document.getElementById('tenant-max-cps').value, 10) || 30;
@@ -5373,9 +5905,14 @@
         name,
         dids,
         instructions,
+        stsEngine,
         openaiPromptId,
         voice,
         openaiModel,
+        elevenlabsAgentId,
+        elevenlabsModel,
+        elevenlabsVoiceId,
+        elevenlabsApiKey,
         audioCodec,
         maxConcurrentCalls,
         maxCallsPerSecond,
@@ -5485,8 +6022,23 @@
                 ${promptIdBadge}
               </td>
               <td>
-                <span class="tag" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd;">🗣️ ${escapeHtml(t.voice || 'alloy')}</span>
-                <span class="tag" style="font-size: 10px;">${escapeHtml(t.openaiModel || 'gpt-realtime-2.1-mini')}</span>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                  <div>
+                    ${t.stsEngine === 'elevenlabs'
+                      ? '<span class="tag" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-size: 10px; font-weight: 700;">🎙️ ElevenLabs STS</span>'
+                      : '<span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 10px; font-weight: 700;">⚡ OpenAI Realtime</span>'}
+                  </div>
+                  <div style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
+                    ${t.stsEngine === 'elevenlabs'
+                      ? `<span class="tag" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd; font-size: 11px;">🗣️ ${escapeHtml(t.elevenlabsVoiceId || 'Rachel')}</span>
+                         <span class="tag" style="font-size: 10px;">${escapeHtml(t.elevenlabsModel || 'turbo_v2_5')}</span>`
+                      : `<span class="tag" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd; font-size: 11px;">🗣️ ${escapeHtml(t.voice || 'alloy')}</span>
+                         <span class="tag" style="font-size: 10px;">${escapeHtml(t.openaiModel || 'gpt-realtime-2.1-mini')}</span>`}
+                  </div>
+                  ${t.stsEngine === 'elevenlabs' && t.elevenlabsAgentId
+                    ? `<div style="font-size: 10px; color: var(--text-dim); font-family: monospace;">🆔 ${escapeHtml(t.elevenlabsAgentId)}</div>`
+                    : ''}
+                </div>
               </td>
               <td style="font-size: 12px; color: var(--text-muted);">${t.maxConcurrentCalls || 200} canais / ${t.maxCallsPerSecond || 30} cps</td>
               <td>
@@ -6991,6 +7543,9 @@
             <button class="btn btn-sm btn-primary" onclick="openAiCostModal('${escapeHtml(p.id)}')">
               🔍 Detalhes de Custo
             </button>
+            <button class="btn btn-sm" style="margin-left: 6px;" onclick="openAiProviderConfigModal('${escapeHtml(p.id)}')">
+              ⚙️ Configurar
+            </button>
           </td>
         </tr>`;
       }).join('');
@@ -6999,6 +7554,105 @@
       const bCalls = document.getElementById('ai-banner-calls');
       if (bTok) bTok.textContent = totalTokens.toLocaleString('pt-BR');
       if (bCalls) bCalls.textContent = totalCalls.toLocaleString('pt-BR');
+    }
+
+    function openAiProviderConfigModal(providerId) {
+      const p = aiProvidersCache.find(x => x.id === providerId) || {};
+      document.getElementById('aiprov-id').value = providerId;
+      document.getElementById('aiprov-modal-title').textContent = `Configurar ${p.name || providerId}`;
+      document.getElementById('aiprov-modal-icon').textContent = p.icon || '⚙️';
+      document.getElementById('aiprov-active').checked = p.active !== false;
+      document.getElementById('aiprov-apikey').value = '';
+      document.getElementById('aiprov-apikey').placeholder = p.apiKey ? p.apiKey : 'Informe a API Key';
+
+      const modelSelect = document.getElementById('aiprov-default-model');
+      const voiceSelect = document.getElementById('aiprov-default-voice');
+      const groupVoice = document.getElementById('group-aiprov-voice');
+      const groupPrompt = document.getElementById('group-aiprov-prompt-id');
+      const groupAgent = document.getElementById('group-aiprov-agent-id');
+
+      const models = p.models || [];
+      modelSelect.innerHTML = models.map(m => `<option value="${escapeHtml(m)}" ${m === p.defaultModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
+      if (!models.length && p.defaultModel) {
+        modelSelect.innerHTML = `<option value="${escapeHtml(p.defaultModel)}" selected>${escapeHtml(p.defaultModel)}</option>`;
+      }
+
+      const voices = p.voices || [];
+      voiceSelect.innerHTML = voices.map(v => `<option value="${escapeHtml(v)}" ${v === p.defaultVoice ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('');
+      if (!voices.length && p.defaultVoice) {
+        voiceSelect.innerHTML = `<option value="${escapeHtml(p.defaultVoice)}" selected>${escapeHtml(p.defaultVoice)}</option>`;
+      }
+
+      if (providerId === 'openai') {
+        if (groupPrompt) groupPrompt.style.display = 'block';
+        if (groupAgent) groupAgent.style.display = 'none';
+        if (groupVoice) groupVoice.style.display = 'block';
+        const promptInput = document.getElementById('aiprov-prompt-id');
+        if (promptInput) promptInput.value = p.promptId || '';
+      } else if (providerId === 'elevenlabs') {
+        if (groupPrompt) groupPrompt.style.display = 'none';
+        if (groupAgent) groupAgent.style.display = 'block';
+        if (groupVoice) groupVoice.style.display = 'block';
+        const agentInput = document.getElementById('aiprov-agent-id');
+        if (agentInput) agentInput.value = p.agentId || '';
+      } else {
+        if (groupPrompt) groupPrompt.style.display = 'none';
+        if (groupAgent) groupAgent.style.display = 'none';
+      }
+
+      openModal('modal-ai-provider-config');
+    }
+
+    function toggleApiKeyVisibility(inputId) {
+      const el = document.getElementById(inputId);
+      if (!el) return;
+      el.type = el.type === 'password' ? 'text' : 'password';
+    }
+
+    async function saveAiProviderConfig() {
+      const id = document.getElementById('aiprov-id').value;
+      if (!id) return;
+
+      const active = document.getElementById('aiprov-active').checked;
+      const apiKey = document.getElementById('aiprov-apikey').value.trim();
+      const defaultModel = document.getElementById('aiprov-default-model').value;
+      const defaultVoice = document.getElementById('aiprov-default-voice').value;
+      const promptId = document.getElementById('aiprov-prompt-id')?.value.trim();
+      const agentId = document.getElementById('aiprov-agent-id')?.value.trim();
+
+      const payload = {
+        active,
+        defaultModel,
+        defaultVoice
+      };
+
+      if (apiKey) payload.apiKey = apiKey;
+      if (id === 'openai' && promptId !== undefined) payload.promptId = promptId;
+      if (id === 'elevenlabs' && agentId !== undefined) payload.agentId = agentId;
+
+      const btn = document.getElementById('btn-save-aiprov');
+      const origText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = 'Salvando...';
+
+      try {
+        const res = await apiFetch(`/v1/ai-providers/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Falha ao salvar provedor');
+
+        showToast(`✅ Provedor "${data.provider?.name || id}" atualizado com sucesso!`, 'success');
+        closeModal('modal-ai-provider-config');
+        await loadAiProvidersTab();
+      } catch (err) {
+        showToast(`Erro ao salvar: ${escapeHtml(err.message)}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origText;
+      }
     }
 
     async function openAiCostModal(providerId = 'openai') {
@@ -7056,7 +7710,15 @@
 
     // Modais Helpers
     function openModal(id) { document.getElementById(id).classList.add('open'); }
-    function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+    function closeModal(id) {
+      if (id === 'modal-transcript-view' && typeof activeTranscriptModalTimer !== 'undefined' && activeTranscriptModalTimer) {
+        clearInterval(activeTranscriptModalTimer);
+        activeTranscriptModalTimer = null;
+        activeTranscriptModalCallId = null;
+      }
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('open');
+    }
 
     function escapeHtml(str) {
       if (!str) return '';
