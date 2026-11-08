@@ -6,10 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from faster_whisper import WhisperModel
 
-INITIAL_PROMPT_PT = (
+AMD_INITIAL_PROMPT_PT = (
     "Alô, quem fala, pois não, quem é, pode falar, com quem deseja falar. "
     "Caixa postal, deixe seu recado após o sinal, não posso atender agora. "
     "O número chamado não existe, está desligado ou fora da área de cobertura."
+)
+
+CONVERSATIONAL_PROMPT_PT = (
+    "Voll, Voll Solutions, atendimento ao cliente, inteligência artificial, automações, planos, quanto custa, demonstração."
 )
 
 # Alucinações clássicas do Whisper em trechos de ruído de linha/silêncio
@@ -26,7 +30,12 @@ class BatchTask:
     def __init__(self, priority: int, audio_np: np.ndarray, initial_prompt: str, future: asyncio.Future):
         self.priority = priority # 0=AMD, 1=STT Live, 2=Batch
         self.audio_np = audio_np
-        self.initial_prompt = initial_prompt or INITIAL_PROMPT_PT
+        if initial_prompt:
+            self.initial_prompt = initial_prompt
+        elif priority == 0:
+            self.initial_prompt = AMD_INITIAL_PROMPT_PT
+        else:
+            self.initial_prompt = CONVERSATIONAL_PROMPT_PT
         self.future = future
         self.created_at = time.time()
 

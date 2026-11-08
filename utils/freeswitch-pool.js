@@ -235,11 +235,38 @@ class FreeSwitchPool {
     let endpoint = null;
     try {
       endpoint = await node.mediaserver.createEndpoint();
-      const sipUri = to.startsWith('sip:') ? to : `sip:${to}`;
+      let sipUri = String(to || '').trim();
+      const fsHost = process.env.AUDIO_FORK_WS_HOST || '192.168.15.36';
+
+      if (sipUri.startsWith('sip:')) {
+        if (!sipUri.includes('@')) {
+          const user = sipUri.replace(/^sip:\+?/, '');
+          sipUri = `sip:${user}@${fsHost}:5080`;
+        } else if (!sipUri.includes(':5080') && sipUri.endsWith(`@${fsHost}`)) {
+          sipUri = `${sipUri}:5080`;
+        }
+      } else {
+        if (sipUri.includes('@')) {
+          const [user, hostPort] = sipUri.split('@');
+          const cleanUser = user.replace(/^\+/, '');
+          const host = hostPort.includes(':') ? hostPort : `${hostPort}:5080`;
+          sipUri = `sip:${cleanUser}@${host}`;
+        } else {
+          const cleanTo = sipUri.replace(/^\+/, '');
+          sipUri = `sip:${cleanTo}@${fsHost}:5080`;
+        }
+      }
+      const callingNumber = from || '5511989785888';
+      const outboundHeaders = {
+        ...headers
+      };
+      if (!outboundHeaders['From'] && !outboundHeaders['from']) {
+        outboundHeaders['From'] = `<sip:${callingNumber}@${fsHost}>`;
+      }
       const dialog = await srf.createUAC(sipUri, {
         localSdp: endpoint.local.sdp,
-        callingNumber: from,
-        headers
+        callingNumber,
+        headers: outboundHeaders
       });
 
       await endpoint.modify(dialog.remote.sdp);

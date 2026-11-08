@@ -277,6 +277,11 @@ class WsMediaBridge {
     const cmd = `uuid_audio_fork ${this.channelUuid} start ${wsUrl} mono 8000 default {} true true 8000`;
     console.log(`[${this.callId}] Iniciando mod_audio_fork na porta ${port}: ${cmd}`);
 
+    if (!this.endpoint || typeof this.endpoint.api !== 'function') {
+      console.warn(`[${this.callId}] [WsMediaBridge] Endpoint FreeSWITCH não disponível para iniciar mod_audio_fork`);
+      return;
+    }
+
     const response = await this.endpoint.api(cmd);
     console.log(`[${this.callId}] Resposta uuid_audio_fork:`, response?.body || response);
   }

@@ -26,14 +26,25 @@ const FrameVad = require('./utils/frame-vad');
 const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
 const tenantManager = require('./utils/tenant-manager');
+const trunkManager = require('./utils/trunk-manager');
+const routeManager = require('./utils/route-manager');
+const providerManager = require('./utils/provider-manager');
+const OutreachManager = require('./utils/outreach-manager');
+const aiCostTracker = require('./utils/ai-cost-tracker');
 const FreeSwitchPool = require('./utils/freeswitch-pool');
 const { WhisperSession, whisperPool } = require('./media/whisper-client');
 const { CallRecorder, formatDateTime } = require('./utils/call-recorder');
+const CallHistoryManager = require('./utils/call-history-manager');
+const ExtensionManager = require('./utils/extension-manager');
 const { createApiRouter } = require('./utils/api-router');
 
 const srf = new Srf();
 const mrf = new Mrf(srf);
 const fsPool = new FreeSwitchPool(mrf);
+const callHistoryManager = new CallHistoryManager();
+const extensionManager = new ExtensionManager(fsPool);
+const outboundRouteManager = require('./utils/outbound-route-manager');
+outboundRouteManager.setFsPool(fsPool);
 
 let isShuttingDown = false;
 let isDrachtioConnected = false;
@@ -277,6 +288,8 @@ class OpenAIS2SBridge {
       ? new CrosstalkFilter({ ratio: crosstalkRatio, hangoverMs: 400 })
       : null;
     this.crosstalkEnrolledLogged = false;
+    this.dynamicEcapaSwitched = false;
+    this.crosstalkRatio = crosstalkRatio;
 
     // VAD de energia por frame: detector de "fala ativa" quando o gate DSP não está em uso
     // (modos 'wespeaker', 'ecapa' e 'none'), evitando barge-in por frames de silêncio ou ruídos de fundo.
@@ -333,6 +346,13 @@ class OpenAIS2SBridge {
     return true;
   }
 
+  safeApi(cmd) {
+    if (!this.endpoint || typeof this.endpoint.api !== 'function' || this.isTerminated) {
+      return Promise.resolve(null);
+    }
+    return this.endpoint.api(cmd).catch(() => null);
+  }
+
   async openCustomerChannel(reason = 'greeting_completed') {
     if (!this.isMicMutedByGrace && !this.isGreetingInProgress) return;
     this.isGreetingInProgress = false;
@@ -353,9 +373,7 @@ class OpenAIS2SBridge {
     }
 
     if (this.endpoint && this.channelUuid && !this.isTerminated) {
-      await this.endpoint.api(`uuid_audio ${this.channelUuid} stop read`).catch((err) => {
-        console.error(`[${this.callId}] 🎙️ [BARGE-IN DINÂMICO] Erro ao abrir canal no FreeSWITCH:`, err.message);
-      });
+      await this.safeApi(`uuid_audio ${this.channelUuid} stop read`);
     }
 
     console.log(
@@ -393,9 +411,9 @@ class OpenAIS2SBridge {
         this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
       } catch {}
     }
-    if (this.endpoint && this.channelUuid) {
-      this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
-      this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
+    if (this.channelUuid) {
+      this.safeApi(`uuid_audio_fork ${this.channelUuid} stop_play`);
+      this.safeApi(`uuid_break ${this.channelUuid} all`);
     }
     return true;
   }
@@ -431,7 +449,7 @@ class OpenAIS2SBridge {
       return;
     }
 
-    const model = this.tenant.openaiModel || 'gpt-realtime-mini';
+    const model = this.tenant.openaiModel || 'gpt-realtime-2.1-mini';
     const openaiUrl = `wss://api.openai.com/v1/realtime?model=${model}`;
 
     console.log(`[${this.callId}] ⚡ Conectando à OpenAI Realtime (${model}) em paralelo...`);
@@ -551,13 +569,35 @@ class OpenAIS2SBridge {
         body.transcript
       ) {
         this.recordTranscriptTurn('Atendente', body.transcript);
-      } else if (body.type === 'response.done' && body.response?.output) {
-        // Fallback para capturar transcript do response.done caso evento individual não tenha sido disparado
-        for (const outItem of body.response.output) {
-          if (outItem.content) {
-            for (const c of outItem.content) {
-              if (c.transcript) {
-                this.recordTranscriptTurn('Atendente', c.transcript);
+      } else if (body.type === 'response.done') {
+        if (body.response?.usage) {
+          aiCostTracker.recordUsage({
+            callId: this.callId,
+            tenantId: this.tenant?.id || 'default',
+            provider: 'openai',
+            model: this.tenant?.openaiModel || 'gpt-realtime-2.1-mini',
+            usage: body.response.usage
+          });
+          try {
+            if (callHistoryManager) {
+              const aiUsage = aiCostTracker.getCostByCallId(this.callId);
+              if (aiUsage) {
+                callHistoryManager.recordCallUpdate(this.callId, {
+                  costUsd: aiUsage.costUsd,
+                  totalTokens: aiUsage.totalTokens
+                });
+              }
+            }
+          } catch {}
+        }
+        if (body.response?.output) {
+          // Fallback para capturar transcript do response.done caso evento individual não tenha sido disparado
+          for (const outItem of body.response.output) {
+            if (outItem.content) {
+              for (const c of outItem.content) {
+                if (c.transcript) {
+                  this.recordTranscriptTurn('Atendente', c.transcript);
+                }
               }
             }
           }
@@ -724,6 +764,17 @@ class OpenAIS2SBridge {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
 
+    // Log explícito do Filtro de Voz ativo na chamada
+    const filterLabels = {
+      atual: 'DSP Acústico (YIN Pitch F0 + RMS Gate - 0.35ms)',
+      dsp: 'DSP Acústico (YIN Pitch F0 + RMS Gate - 0.35ms)',
+      wespeaker: 'CAM++ WeSpeaker (Biometria Neural 512-dim)',
+      ecapa: 'ECAPA-TDNN (Biometria Neural 512-dim)',
+      none: 'Sem Filtro (Bypass)'
+    };
+    const activeFilterLabel = filterLabels[this.crosstalkMode] || this.crosstalkMode;
+    console.log(`[${this.callId}] 🛡️ [FILTRO DE VOZ ATIVO] Modo: [${this.crosstalkMode.toUpperCase()}] -> ${activeFilterLabel}`);
+
     // 0. Bloqueio Dinâmico de Barge-in: Corta o microfone do interlocutor no FreeSWITCH durante a frase inicial do agente
     if (this.bargeinGraceSec > 0) {
       this.isMicMutedByGrace = true;
@@ -731,9 +782,7 @@ class OpenAIS2SBridge {
       this.greetingAudioBytes = 0;
       this.greetingPlaybackStartTime = null;
 
-      this.endpoint.api(`uuid_audio ${this.channelUuid} start read mute`).catch((err) => {
-        console.error(`[${this.callId}] 🔇 [BARGE-IN DINÂMICO] Erro ao cortar microfone no FreeSWITCH:`, err.message);
-      });
+      this.safeApi(`uuid_audio ${this.channelUuid} start read mute`);
       console.log(
         `[${this.callId}] 🔇 [BARGE-IN DINÂMICO] Canal do microfone do cliente CORTADO no FreeSWITCH durante a frase inicial do agente.`
       );
@@ -830,6 +879,10 @@ class OpenAIS2SBridge {
       });
 
       this.whisperSession.on('transcript', (stt) => {
+        // Se a OpenAI Realtime já estiver ativa com transcrição nativa, não duplica a fala no histórico
+        if (this.openaiSocket && this.openaiReady) {
+          return;
+        }
         if (this.isBargeinGraceActive()) {
           console.log(`[${this.callId}] 🛡️ [BARGE-IN GRACE] Transcrição do cliente ignorada durante carência: "${stt.text}"`);
           this.recordTranscriptTurn('Cliente', `[Ignorado na Saudação]: ${stt.text}`);
@@ -887,9 +940,9 @@ class OpenAIS2SBridge {
     }
 
     // 3. Limpeza de sessões residuais
-    this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop`).catch(() => {});
+    this.safeApi(`uuid_audio_fork ${this.channelUuid} stop`);
     await wait(100);
-    if (this.isTerminated) return;
+    if (this.isTerminated || !this.endpoint) return;
 
     if (this.endpoint.conn) {
       try {
@@ -900,8 +953,8 @@ class OpenAIS2SBridge {
       }
     }
 
-    this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
-    this.endpoint.api(`uuid_setvar ${this.channelUuid} noise_suppression true`).catch(() => {});
+    this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation false`);
+    this.safeApi(`uuid_setvar ${this.channelUuid} noise_suppression true`);
 
     let vadThreshold = 0.45;
     let prefixPaddingMs = 300;
@@ -964,6 +1017,14 @@ class OpenAIS2SBridge {
           isPrimaryVoiceDsp = !this.isToneProbe && !amdStillDeciding && !isGraceActive
             ? this.crosstalkFilter.process(buffer)
             : false;
+
+          // Monitoramento em tempo real do piso de ruído durante a chamada:
+          // Se o ruído subir consistentemente (noiseFloor > 200, ex: rua, TV ou conversas paralelas),
+          // chaveia automaticamente para o modelo neural ECAPA para máxima robustez acústica!
+          if (!this.dynamicEcapaSwitched && this.crosstalkFilter.noiseFloor >= 200) {
+            this.dynamicEcapaSwitched = true;
+            this.switchCrosstalkFilter('ecapa', `Piso de ruído elevado em tempo real (${Math.round(this.crosstalkFilter.noiseFloor)} RMS)`);
+          }
         } else if (isGraceActive || this.isToneProbe || amdStillDeciding) {
           isPrimaryVoiceDsp = false;
         }
@@ -1057,14 +1118,24 @@ class OpenAIS2SBridge {
       console.log(
         `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms (Sonar pulado para 0ms de atraso)`
       );
+
+      // Chaveamento Dinâmico para ECAPA em ambiente ruidoso
+      if (['STREET', 'TV', 'OFFICE'].includes(this.currentProfile) && (this.crosstalkMode === 'atual' || this.crosstalkMode === 'dsp')) {
+        this.switchCrosstalkFilter('ecapa', `Ambiente ruidoso detectado pós-AMD (${this.currentProfile})`);
+      }
     } else if (bargeinLevel >= 3) {
-      this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+      this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation false`);
       await wait(400);
+      if (this.isTerminated || !this.endpoint) return;
 
       this.isToneProbe = true;
-      this.endpoint.play('tone_stream://v=0;%(700,0,425)').catch(() => {});
+      if (this.endpoint && typeof this.endpoint.play === 'function') {
+        this.endpoint.play('tone_stream://v=0;%(700,0,425)').catch(() => {});
+      }
       const startSamples = this.energyManager.echoSamplesCount;
       await wait(700);
+      if (this.isTerminated || !this.endpoint) return;
+
       this.isToneProbe = false;
       const collected = this.energyManager.echoSamplesCount - startSamples;
 
@@ -1079,10 +1150,10 @@ class OpenAIS2SBridge {
 
       if (this.deviceMode === 'viva_voz') {
         console.log(`[${this.callId}] 🛡️ Ativando AEC para proteção de Viva-voz.`);
-        this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation true`).catch(() => {});
+        this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation true`);
       } else {
         console.log(`[${this.callId}] 🎧 Mantendo AEC desligado para máxima fluidez no Fone.`);
-        this.endpoint.api(`uuid_setvar ${this.channelUuid} echo_cancellation false`).catch(() => {});
+        this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation false`);
       }
 
       this.currentProfile = this.energyManager.getClassification();
@@ -1095,6 +1166,11 @@ class OpenAIS2SBridge {
       console.log(
         `[${this.callId}] 🎯 SONAR LOCK: Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms`
       );
+
+      // Chaveamento Dinâmico para ECAPA em ambiente ruidoso
+      if (['STREET', 'TV', 'OFFICE'].includes(this.currentProfile) && (this.crosstalkMode === 'atual' || this.crosstalkMode === 'dsp')) {
+        this.switchCrosstalkFilter('ecapa', `Ambiente ruidoso detectado na calibração Sonar (${this.currentProfile})`);
+      }
     } else {
       this.calibrationActive = false;
       this.endpoint.play('tone_stream://v=-13;%(500,0,425)').catch(() => {});
@@ -1127,7 +1203,8 @@ class OpenAIS2SBridge {
           input: {
             transcription: {
               model: 'whisper-1',
-              language: 'pt'
+              language: 'pt',
+              prompt: 'Voll, Voll Solutions, atendimento ao cliente, inteligência artificial, automações, planos, quanto custa, demonstração'
             },
             turn_detection: {
               type: 'server_vad',
@@ -1210,6 +1287,14 @@ class OpenAIS2SBridge {
     this.transcriptLog.push(entry);
     this.lastTurn = { speaker, text: cleanText, time: now, entry };
     console.log(`[${this.callId}] 📝 ${formatted}`);
+    try {
+      if (callHistoryManager) {
+        callHistoryManager.recordCallUpdate(this.callId, {
+          transcriptTurnsCount: this.transcriptLog.length,
+          lastTurn: entry
+        });
+      }
+    } catch {}
     return entry;
   }
 
@@ -1261,15 +1346,49 @@ class OpenAIS2SBridge {
     return info;
   }
 
+  switchCrosstalkFilter(newMode, reason = 'noise_detected') {
+    const targetMode = String(newMode || '').toLowerCase();
+    if (!['atual', 'dsp', 'wespeaker', 'ecapa', 'none'].includes(targetMode)) return;
+    if (this.crosstalkMode === targetMode) return;
+
+    const prevMode = this.crosstalkMode;
+    this.crosstalkMode = targetMode;
+    this.isDspFilterActive = this.crosstalkMode === 'atual' || this.crosstalkMode === 'dsp';
+    this.isNeuralFilterActive = this.crosstalkMode === 'wespeaker' || this.crosstalkMode === 'ecapa';
+
+    if (this.isDspFilterActive) {
+      if (!this.crosstalkFilter) {
+        this.crosstalkFilter = new CrosstalkFilter({ ratio: this.crosstalkRatio, hangoverMs: 400 });
+      }
+      this.frameVad = null;
+    } else {
+      const frameVadMinRms = Number(this.tenant?.bargeinMinRms || process.env.BARGEIN_MIN_RMS || 800);
+      const frameVadAttack = Number(this.tenant?.bargeinAttackFrames || process.env.BARGEIN_ATTACK_FRAMES || 8);
+      this.frameVad = new FrameVad({ minRms: frameVadMinRms, attackFrames: frameVadAttack, noiseRatio: 2.8 });
+    }
+
+    if (this.whisperSession) {
+      if (this.isNeuralFilterActive) {
+        this.whisperSession.setSpeakerFilter(this.crosstalkMode);
+      } else {
+        this.whisperSession.setSpeakerFilter('none');
+      }
+    }
+
+    console.log(
+      `[${this.callId}] 🔀 [DYNAMIC FILTER SWITCH] Filtro de voz alternado de [${prevMode.toUpperCase()}] para [${this.crosstalkMode.toUpperCase()}] | Motivo: ${reason}`
+    );
+  }
+
   interruptAgent() {
     this.isAgentTalking = false;
     this.mediaBridge.killAudio();
     if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
       this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
     }
-    if (this.endpoint && this.channelUuid) {
-      this.endpoint.api(`uuid_audio_fork ${this.channelUuid} stop_play`).catch(() => {});
-      this.endpoint.api(`uuid_break ${this.channelUuid} all`).catch(() => {});
+    if (this.channelUuid) {
+      this.safeApi(`uuid_audio_fork ${this.channelUuid} stop_play`);
+      this.safeApi(`uuid_break ${this.channelUuid} all`);
     }
   }
 
@@ -1622,8 +1741,13 @@ async function originateOutboundCall(params) {
   };
 
   try {
-    const from = params.from || '1000';
-    const to = params.to;
+    const from = (params.from && params.from.trim()) ? params.from.trim() : '5511989785888';
+    const to = params.to ? String(params.to).trim() : '';
+
+    if (to === '9000' || to === '*1000' || to.toLowerCase() === 'ia') {
+      throw new Error('O ramal 9000 é exclusivo para chamadas de entrada (quando você liga DE um softphone PARA a IA). Para efetuar uma chamada de teste de saída, informe seu número de celular com DDD (ex: 11999998888 ou 5511999998888) ou um ramal SIP registrado (ex: 1000).');
+    }
+
     const customHeaders = params.headers || {};
 
     const { endpoint, dialog: uacDialog, fsNode, releaseNodeSlot: rSlot } = await fsPool.originateCall(srf, {
@@ -1636,30 +1760,69 @@ async function originateOutboundCall(params) {
     releaseNodeSlot = rSlot;
     const callId = dialog.sip?.callId || `out-${Date.now()}`;
 
-    console.log(
-      `[${callId}] 📤 Chamada OUTBOUND conectada de ${from} para ${to} | Tenant: [${tenant.id}] | Nó Mídia: [${fsNode.id}]`
-    );
-
     const sipHeaders = {
       'x-amd-enabled':
-        params.amd !== undefined ? String(Boolean(params.amd)) : customHeaders['X-AMD-Enabled'] || 'true',
+        params.amd !== undefined
+          ? String(Boolean(params.amd))
+          : customHeaders['X-AMD-Enabled'] || String(Boolean(tenant.amd?.enabled)),
       'x-stt-enabled':
         params.stt !== undefined ? String(Boolean(params.stt)) : customHeaders['X-STT-Enabled'],
       'x-dtmf-enabled':
         params.dtmf !== undefined ? String(Boolean(params.dtmf)) : customHeaders['X-DTMF-Enabled'],
       'x-bargein-grace-sec':
         params.bargeinGraceSec !== undefined ? String(params.bargeinGraceSec) : customHeaders['X-Bargein-Grace-Sec'],
+      'x-crosstalk-mode':
+        params.crosstalkMode !== undefined
+          ? String(params.crosstalkMode)
+          : customHeaders['X-Crosstalk-Mode'] || String(tenant.crosstalkFilter?.mode || 'atual'),
       'x-tenant-id': tenant.id
     };
 
+    const outFilterMode = (sipHeaders['x-crosstalk-mode'] || tenant.crosstalkFilter?.mode || 'atual').toLowerCase();
+    console.log(
+      `[${callId}] 📤 Chamada OUTBOUND conectada de ${from} para ${to} | Tenant: [${tenant.id}] | Filtro: [${outFilterMode.toUpperCase()}] | Nó Mídia: [${fsNode.id}]`
+    );
+
     bridge = new OpenAIS2SBridge(tenant, sipHeaders);
     activeBridges.set(callId, bridge);
+    try {
+      if (callHistoryManager) {
+        callHistoryManager.recordCallStart({
+          callId,
+          channelUuid: endpoint ? endpoint.uuid : null,
+          direction: 'outbound',
+          tenantId: tenant.id,
+          caller: from,
+          called: to,
+          startedAt: new Date().toISOString(),
+          amdEnabled: Boolean(params.amd)
+        });
+      }
+    } catch {}
 
     let cleanedUp = false;
     const cleanupCall = async (reason = 'normal_hangup') => {
       if (cleanedUp) return;
       cleanedUp = true;
       console.log(`[${callId}] Limpando chamada outbound (Motivo: ${reason})...`);
+      try {
+        if (bridge && callHistoryManager) {
+          const callInfo = bridge.getCallInfo(true);
+          const aiUsage = (aiCostTracker && typeof aiCostTracker.getCostByCallId === 'function')
+            ? aiCostTracker.getCostByCallId(callId)
+            : null;
+          callHistoryManager.recordCallEnd({
+            ...callInfo,
+            direction: 'outbound',
+            hangupReason: reason,
+            hangupBy: reason.includes('destroy') ? 'remote' : 'system',
+            costUsd: aiUsage ? aiUsage.costUsd : undefined,
+            totalTokens: aiUsage ? aiUsage.totalTokens : undefined
+          });
+        }
+      } catch (logErr) {
+        console.warn(`[${callId}] Falha ao arquivar log da chamada:`, logErr.message);
+      }
       activeBridges.delete(callId);
       releaseTenantSlotOnce();
       if (releaseNodeSlot) releaseNodeSlot();
@@ -1704,9 +1867,59 @@ async function originateOutboundCall(params) {
         dialog.destroy();
       } catch {}
     }
+    // Grava tentativa com falha no histórico para que os logs reflitam o disparo imediatamente
+    try {
+      if (callHistoryManager) {
+        callHistoryManager.recordCallEnd({
+          callId: (dialog && dialog.sip?.callId) || `fail-${Date.now()}`,
+          direction: 'outbound',
+          tenantId: tenant?.id || 'default',
+          caller: params.from || '5511989785888',
+          called: params.to || '1000',
+          durationSec: 0,
+          costUsd: 0,
+          costBrl: 0,
+          hangupReason: err.message || 'originate_failed',
+          hangupBy: 'system',
+          codec: 'g711_ulaw',
+          deviceMode: 'outbound_attempt',
+          noiseProfile: 'N/A',
+          amdResult: 'FALHA_CONEXAO',
+          sttEnabled: Boolean(params.stt)
+        });
+      }
+    } catch (logErr) {
+      console.warn('Falha ao registrar tentativa com erro no histórico:', logErr.message);
+    }
     throw err;
   }
 }
+
+// Troncos SIP: aplica no FreeSWITCH assim que um nó ESL estiver pronto
+trunkManager.attach(fsPool);
+(function syncTrunksWhenReady(attempt = 0) {
+  if (isShuttingDown) return;
+  if (!fsPool.hasHealthyNode()) {
+    if (attempt < 60) setTimeout(() => syncTrunksWhenReady(attempt + 1), 2000);
+    return;
+  }
+  trunkManager
+    .syncAll()
+    .then((r) => console.log('[TrunkManager] Sincronização de troncos com FreeSWITCH:', JSON.stringify(r)))
+    .catch((e) => console.error('[TrunkManager] Falha ao sincronizar troncos:', e.message));
+
+  extensionManager
+    .syncAllToFreeSwitch()
+    .then((r) => console.log('[ExtensionManager] Sincronização de ramais com FreeSWITCH:', JSON.stringify(r)))
+    .catch((e) => console.error('[ExtensionManager] Falha ao sincronizar ramais:', e.message));
+
+  outboundRouteManager
+    .syncAllToFreeSwitch()
+    .then((r) => console.log('[OutboundRouteManager] Sincronização de rotas de saída com FreeSWITCH:', JSON.stringify(r)))
+    .catch((e) => console.error('[OutboundRouteManager] Falha ao sincronizar rotas de saída:', e.message));
+})();
+
+const outreachManager = new OutreachManager({ providerManager, originateCallHandler: originateOutboundCall });
 
 mediaServer.setApiHandler(
   createApiRouter({
@@ -1715,11 +1928,40 @@ mediaServer.setApiHandler(
     fsPool,
     whisperPool,
     mediaServer,
-    originateCallHandler: originateOutboundCall
+    originateCallHandler: originateOutboundCall,
+    trunkManager,
+    routeManager,
+    providerManager,
+    outreachManager,
+    callHistoryManager,
+    aiCostTracker,
+    extensionManager,
+    outboundRouteManager
   })
 );
 
 mediaServer.listen().catch(() => {});
+
+// Keep-alive SIP OPTIONS (Softphones como Telephone, Zoiper, MicroSIP enviam ping OPTIONS)
+srf.options((req, res) => {
+  res.send(200);
+});
+
+// Proxy transparente de Registro SIP (REGISTER) para o FreeSWITCH (porta 5080)
+// Permite que softphones se registrem tanto pela porta padrão 5060 quanto pela 5080
+srf.register(async (req, res) => {
+  const user = req.get('From') || req.uri;
+  console.log(`[SIP Register] Recebido REGISTER na porta 5060 para ${user}, repassando para FreeSWITCH 5080...`);
+  try {
+    const fsTarget = 'sip:192.168.15.36:5080';
+    await srf.proxyRequest(req, fsTarget);
+  } catch (err) {
+    console.error('[SIP Register Proxy] Erro ao repassar registro:', err.message);
+    if (!res.finalResponseSent) {
+      try { res.send(503); } catch (_) {}
+    }
+  }
+});
 
 // Atendimento de Chamadas SIP (INVITE) com Balanceamento entre Instâncias FreeSWITCH
 srf.invite(async (req, res) => {
@@ -1728,7 +1970,10 @@ srf.invite(async (req, res) => {
   }
 
   const callId = getCallId(req);
-  const tenant = tenantManager.resolveTenant(req);
+  const inboundTrunkId = trunkManager.identifyTrunk(req);
+  const routed = routeManager.resolveRoute(req, tenantManager, inboundTrunkId);
+  const tenant = routed.tenant;
+  const routeRule = routed.rule;
 
   if (!tenant || !tenant.active) {
     console.warn(`[${callId}] Chamada rejeitada: Tenant inativo ou não cadastrado.`);
@@ -1742,6 +1987,22 @@ srf.invite(async (req, res) => {
     return res.send(slotCheck.sipStatus || 486);
   }
 
+  // Limites de canais da regra de roteamento e do tronco de origem
+  if (!routeManager.tryAcquire(routeRule)) {
+    tenantManager.releaseSlot(tenant);
+    console.warn(`[${callId}] Chamada recusada: limite de canais da regra [${routeRule.id}] atingido.`);
+    return res.send(486);
+  }
+  if (!trunkManager.tryAcquire(inboundTrunkId)) {
+    routeManager.release(routeRule);
+    tenantManager.releaseSlot(tenant);
+    console.warn(`[${callId}] Chamada recusada: limite de canais do tronco [${inboundTrunkId}] atingido.`);
+    return res.send(486);
+  }
+  if (routeRule) {
+    console.log(`[${callId}] 🔀 Rota [${routeRule.name}] -> Agente [${tenant.id}]${inboundTrunkId ? ` | Tronco [${inboundTrunkId}]` : ''}`);
+  }
+
   let endpoint;
   let dialog;
   let fsNode;
@@ -1753,17 +2014,13 @@ srf.invite(async (req, res) => {
     if (tenantSlotReleased) return;
     tenantSlotReleased = true;
     tenantManager.releaseSlot(tenant);
+    routeManager.release(routeRule);
+    trunkManager.release(inboundTrunkId);
   };
 
   try {
     const caller = req.callingNumber || req.get('From');
     const called = req.calledNumber || req.get('To');
-
-    // Aloca a chamada na instância de FreeSWITCH com menor carga do Pool
-    ({ endpoint, dialog, fsNode, releaseNodeSlot } = await fsPool.connectCaller(req, res));
-    console.log(
-      `[${callId}] 📞 Chamada atendida de ${caller} para ${called} | Tenant: [${tenant.id}] | Nó Mídia: [${fsNode.id}] (Ativas no nó: ${fsNode.activeCalls})`
-    );
 
     const sipHeaders = {
       'x-amd-enabled': req.get('x-amd-enabled') || req.get('X-AMD-Enabled'),
@@ -1772,15 +2029,66 @@ srf.invite(async (req, res) => {
       'x-bargein-grace-sec': req.get('x-bargein-grace-sec') || req.get('X-Bargein-Grace-Sec'),
       'x-tenant-id': req.get('x-tenant-id') || req.get('X-Tenant-ID')
     };
+    if (routeRule) {
+      // Regra de roteamento fornece defaults (headers SIP explícitos continuam com prioridade)
+      if (!sipHeaders['x-amd-enabled'] && routeRule.amdMode && routeRule.amdMode !== 'tenant_default') {
+        sipHeaders['x-amd-enabled'] = String(routeRule.amdMode === 'active');
+      }
+      if (!sipHeaders['x-bargein-grace-sec'] && routeRule.bargeinGraceSec !== null && routeRule.bargeinGraceSec !== undefined && routeRule.bargeinGraceSec !== '') {
+        sipHeaders['x-bargein-grace-sec'] = String(routeRule.bargeinGraceSec);
+      }
+      if (!sipHeaders['x-crosstalk-mode'] && routeRule.crosstalkFilterMode && routeRule.crosstalkFilterMode !== 'tenant_default') {
+        sipHeaders['x-crosstalk-mode'] = String(routeRule.crosstalkFilterMode);
+      }
+    }
+
+    // Aloca a chamada na instância de FreeSWITCH com menor carga do Pool
+    ({ endpoint, dialog, fsNode, releaseNodeSlot } = await fsPool.connectCaller(req, res));
+    const resolvedFilterMode = (sipHeaders['x-crosstalk-mode'] || tenant.crosstalkFilter?.mode || 'atual').toLowerCase();
+    console.log(
+      `[${callId}] 📞 Chamada atendida de ${caller} para ${called} | Tenant: [${tenant.id}] | Filtro: [${resolvedFilterMode.toUpperCase()}] | Nó Mídia: [${fsNode.id}] (Ativas no nó: ${fsNode.activeCalls})`
+    );
 
     bridge = new OpenAIS2SBridge(tenant, sipHeaders);
     activeBridges.set(callId, bridge);
+    try {
+      if (callHistoryManager) {
+        callHistoryManager.recordCallStart({
+          callId,
+          channelUuid: endpoint ? endpoint.uuid : null,
+          direction: 'inbound',
+          tenantId: tenant.id,
+          caller,
+          called,
+          startedAt: new Date().toISOString(),
+          amdEnabled: Boolean(tenant.amd?.enabled)
+        });
+      }
+    } catch {}
 
     let cleanedUp = false;
     const cleanupCall = async (reason = 'normal_hangup') => {
       if (cleanedUp) return;
       cleanedUp = true;
       console.log(`[${callId}] Limpando recursos da chamada (Motivo: ${reason})...`);
+      try {
+        if (bridge && callHistoryManager) {
+          const callInfo = bridge.getCallInfo(true);
+          const aiUsage = (aiCostTracker && typeof aiCostTracker.getCostByCallId === 'function')
+            ? aiCostTracker.getCostByCallId(callId)
+            : null;
+          callHistoryManager.recordCallEnd({
+            ...callInfo,
+            direction: 'inbound',
+            hangupReason: reason,
+            hangupBy: reason.includes('destroy') ? 'remote' : 'system',
+            costUsd: aiUsage ? aiUsage.costUsd : undefined,
+            totalTokens: aiUsage ? aiUsage.totalTokens : undefined
+          });
+        }
+      } catch (logErr) {
+        console.warn(`[${callId}] Falha ao arquivar log da chamada:`, logErr.message);
+      }
       activeBridges.delete(callId);
       releaseTenantSlotOnce();
       if (releaseNodeSlot) releaseNodeSlot();
@@ -1804,20 +2112,49 @@ srf.invite(async (req, res) => {
 
     await bridge.start({ callId, endpoint, dialog, caller, called });
   } catch (err) {
-    console.error(`[${callId}] Erro durante atendimento da chamada:`, err);
-    activeBridges.delete(callId);
-    releaseTenantSlotOnce();
-    if (releaseNodeSlot) releaseNodeSlot();
-    try {
-      res.send(500);
-    } catch {}
-    try {
-      if (dialog) dialog.destroy();
-    } catch {}
-    try {
-      if (bridge) await bridge.stop();
-    } catch {}
+    if (!cleanedUp) {
+      cleanedUp = true;
+      console.error(`[${callId}] Erro durante atendimento da chamada:`, err);
+      activeBridges.delete(callId);
+      releaseTenantSlotOnce();
+      if (releaseNodeSlot) releaseNodeSlot();
+      try {
+        if (callHistoryManager) {
+        callHistoryManager.recordCallEnd({
+          callId,
+          direction: 'inbound',
+          tenantId: tenant ? tenant.id : 'default',
+          caller: req.callingNumber || req.get('From') || 'Desc',
+          called: req.calledNumber || req.get('To') || '1000',
+          durationSec: 0,
+          costUsd: 0,
+          costBrl: 0,
+          hangupReason: `fail_setup: ${err.message}`,
+          hangupBy: 'system',
+          codec: 'g711_ulaw',
+          deviceMode: 'inbound_attempt',
+          noiseProfile: 'N/A',
+          amdResult: 'FALHA_CONEXAO',
+          sttEnabled: false
+        });
+      }
+    } catch (logErr) {
+      console.warn(`[${callId}] Falha ao registrar log de erro inbound:`, logErr.message);
+    }
+    if (endpoint) {
+      try { endpoint.destroy(); } catch {}
+    }
+    if (dialog) {
+      try { dialog.destroy(); } catch {}
+    }
+    if (bridge) {
+      try { await bridge.stop(); } catch {}
+    }
   }
+  try {
+    res.send(500);
+  } catch {}
+}
 });
 
 // Encerramento Gracioso (Graceful Shutdown)
