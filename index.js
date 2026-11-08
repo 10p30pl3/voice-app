@@ -843,7 +843,19 @@ class OpenAIS2SBridge {
       this.terminateCall('safety_limit_3_minutes');
     }, this.maxDurationSec * 1000);
 
-    // 1. Inicia sessão Whisper (AMD Inteligente e/ou Transcrição STT) se configurado
+    const sipAmdHeader = this.sipHeaders['x-amd-enabled'] || this.sipHeaders['X-AMD-Enabled'];
+    this.isAmdEnabled =
+      sipAmdHeader !== undefined
+        ? String(sipAmdHeader).toLowerCase() === 'true'
+        : Boolean(this.tenant.amd?.enabled);
+
+    const sipSttHeader = this.sipHeaders['x-stt-enabled'] || this.sipHeaders['X-STT-Enabled'];
+    this.isSttEnabled =
+      sipSttHeader !== undefined
+        ? String(sipSttHeader).toLowerCase() === 'true'
+        : this.tenant.stt?.enabled !== false;
+
+    // 1. Inicia sessão Whisper (AMD Inteligente) se configurado
     this.whisperSession = new WhisperSession({
       callId: this.callId,
       channelUuid: this.channelUuid,
@@ -854,8 +866,6 @@ class OpenAIS2SBridge {
     const isActiveAmd =
       this.whisperSession.isAmdEnabled && this.whisperSession.amdMode === 'active';
 
-    // Se o AMD ativo NÃO estiver bloqueando, inicia o handshake da OpenAI em paralelo com o Sonar.
-    // Se o AMD ativo estiver ligado, só conectamos à OpenAI APÓS confirmar HUMANO (Zero sessões OpenAI em Caixa Postal/Operadora!).
     if (!isActiveAmd) {
       this.initOpenAiConnection();
     }
@@ -863,7 +873,7 @@ class OpenAIS2SBridge {
     if (this.whisperSession.isActive()) {
       this.whisperSession.on('decision', (decision) => {
         if (['caixa_postal', 'operadora', 'silencio'].includes(decision.label)) {
-          if (this.whisperSession.amdMode === 'active') {
+          if (this.whisperSession?.amdMode === 'active' || this.tenant.amd?.mode === 'active') {
             console.log(
               `[${this.callId}] 🤖 AMD [ACTIVE]: Detectada ${decision.label.toUpperCase()} (${decision.reason}). Encerrando chamada.`
             );
@@ -876,42 +886,6 @@ class OpenAIS2SBridge {
         } else {
           console.log(`[${this.callId}] 👤 AMD: HUMANO confirmado (${decision.reason}).`);
         }
-      });
-
-      this.whisperSession.on('transcript', (stt) => {
-        // Se a OpenAI Realtime já estiver ativa com transcrição nativa, não duplica a fala no histórico
-        if (this.openaiSocket && this.openaiReady) {
-          return;
-        }
-        if (this.isBargeinGraceActive()) {
-          console.log(`[${this.callId}] 🛡️ [BARGE-IN GRACE] Transcrição do cliente ignorada durante carência: "${stt.text}"`);
-          this.recordTranscriptTurn('Cliente', `[Ignorado na Saudação]: ${stt.text}`);
-        } else {
-          this.recordTranscriptTurn('Cliente', stt.text);
-        }
-      });
-
-      this.whisperSession.on('speaker_enrolled', (evt) => {
-        console.log(
-          `[${this.callId}] 👤 [BIOMETRIA NEURAL ${evt.model.toUpperCase()}] Assinatura vocal do titular cadastrada (${evt.duration_s || 0}s). Vozes divergentes serão bloqueadas.`
-        );
-      });
-
-      this.whisperSession.on('speaker_verification', (evt) => {
-        this.lastSpeakerScore = evt.similarity;
-        if (!evt.is_match) {
-          this.isSecondaryVoiceBlocked = true;
-          console.log(
-            `[${this.callId}] 🛡️ [BIOMETRIA ${evt.model.toUpperCase()}] Voz de fundo/terceiro BLOQUEADA: similaridade ${evt.similarity} < limiar ${evt.threshold}. Áudio e barge-in barrados.`
-          );
-        } else {
-          this.isSecondaryVoiceBlocked = false;
-        }
-      });
-
-      // Fim da rajada de fala: libera o bloqueio para que a próxima fala (do titular) não seja mutada
-      this.whisperSession.on('speaker_idle', () => {
-        this.isSecondaryVoiceBlocked = false;
       });
 
       this.whisperSession.start();
@@ -1054,19 +1028,10 @@ class OpenAIS2SBridge {
           this.triggerBargeIn(this.isNeuralFilterActive ? `biometric_${this.crosstalkMode}` : 'local_biometric_vad');
         }
 
-        // Encaminha áudio ao Whisper / Verifier:
-        // Durante a carência inicial/saudação (isGraceActive), NÃO envia áudio para a biometria
-        // neural para evitar cadastrar ruídos de fundo, TV ou terceiros como titular da chamada.
-        if (this.whisperSession && !this.isToneProbe) {
-          if (this.whisperSession.isAmdEnabled && !this.whisperSession.decisionReceived) {
-            this.whisperSession.pushAudio(buffer, 8000);
-          } else if (!isGraceActive) {
-            if (this.isNeuralFilterActive) {
-              this.whisperSession.pushAudio(buffer, 8000);
-            } else {
-              this.whisperSession.pushAudio(effectiveBuffer, 8000);
-            }
-          }
+        // Whisper local é SOMENTE para AMD (antes da decisão de humano/secretária).
+        // Após a decisão ou connect, ele é desligado e não consome áudio.
+        if (this.whisperSession && this.isAmdEnabled && !this.whisperSession.decisionReceived && !this.isToneProbe) {
+          this.whisperSession.pushAudio(buffer, 8000);
         }
 
         if (
@@ -1089,17 +1054,30 @@ class OpenAIS2SBridge {
     });
     if (this.isTerminated) return;
 
-    // 4. Se o AMD estiver ligado na chamada, aguarda a classificação antes de falar na OpenAI
-    const amdWasExecuted = !!(this.whisperSession && this.whisperSession.isAmdEnabled);
+    // 4. Se o AMD estiver ligado na chamada, aguarda a classificação antes de liberar a conversação
+    const amdWasExecuted = !!(this.isAmdEnabled && this.whisperSession);
     if (amdWasExecuted) {
       console.log(`[${this.callId}] 🕵️ Aguardando análise do Detector de Secretária (AMD)...`);
       await this.whisperSession.waitForDecision();
       if (this.isTerminated) {
         return; // Chamada encerrada pelo AMD (caixa_postal / operadora / silencio) sem abrir nem gastar sessão na OpenAI!
       }
-      if (isActiveAmd && !this.openaiSocket) {
+      // Pós-decisão / connect: desliga o Whisper local imediatamente para zerar consumo de CPU/GPU
+      if (this.whisperSession) {
+        console.log(`[${this.callId}] 🔌 Connect confirmado / AMD concluído. Desligando Whisper local.`);
+        this.whisperSession.stop();
+        this.whisperSession = null;
+      }
+      if (!this.openaiSocket) {
         this.initOpenAiConnection();
       }
+    }
+
+    // Connect da chamada: garante que o Whisper local seja desligado para zerar consumo de CPU/GPU
+    if (this.whisperSession) {
+      console.log(`[${this.callId}] 🔌 Connect confirmado. Desligando Whisper local.`);
+      this.whisperSession.stop();
+      this.whisperSession = null;
     }
 
     const bargeinLevel = this.tenant.bargeinLevel ?? 3;
@@ -1330,8 +1308,8 @@ class OpenAIS2SBridge {
       isMuted: this.isMuted,
       isOnHold: this.isOnHold,
       openaiConnected: this.openaiConnected,
-      amdEnabled: !!(this.whisperSession && this.whisperSession.isAmdEnabled),
-      sttEnabled: !!(this.whisperSession && this.whisperSession.isSttEnabled),
+      amdEnabled: Boolean(this.isAmdEnabled),
+      sttEnabled: Boolean(this.isSttEnabled),
       recordingActive: !!(this.recorder && this.recorder.isStarted && !this.recorder.isStopped && !this.recorder.isPaused),
       recordingPaused: !!(this.recorder && this.recorder.isPaused),
       recordingFile: this.recorder ? this.recorder.fileName : null,

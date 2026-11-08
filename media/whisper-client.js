@@ -250,6 +250,13 @@ class WhisperSession extends EventEmitter {
         try {
           const msg = JSON.parse(raw.toString());
 
+          if (msg.type === 'speaker_filter_updated') {
+            this.spkFilter = msg.spk_filter;
+            this.isSpkFilterEnabled = msg.spk_filter !== 'none';
+            this.emit('speaker_filter_updated', msg);
+            return;
+          }
+
           if (msg.type === 'decision' && !this.decisionReceived) {
             console.log(
               `[${this.callId}] 🎯 [AMD] Decisão: [${msg.label.toUpperCase()}] (Confiança: ${(msg.confidence * 100).toFixed(0)}% | Fala: ${msg.speech_ms || 0}ms | Texto: "${msg.transcript || ''}")`
@@ -257,7 +264,8 @@ class WhisperSession extends EventEmitter {
 
             this.resolveDecisionOnce(msg);
 
-            if (!this.isSttEnabled && !this.isSpkFilterEnabled) {
+            // Whisper local é estritamente para detecção de AMD: desliga assim que a decisão for obtida
+            if (!this.isSttEnabled) {
               this.stop();
             }
           }
@@ -307,6 +315,18 @@ class WhisperSession extends EventEmitter {
     if (this.node) {
       this.node.activeSessions = Math.max(0, this.node.activeSessions - 1);
       this.node = null;
+    }
+  }
+
+  setSpeakerFilter(filterName, threshold = null) {
+    this.spkFilter = (filterName || 'none').toLowerCase();
+    this.isSpkFilterEnabled = this.spkFilter === 'wespeaker' || this.spkFilter === 'ecapa';
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'set_spk_filter',
+        spk_filter: this.spkFilter,
+        spk_threshold: threshold
+      }));
     }
   }
 
