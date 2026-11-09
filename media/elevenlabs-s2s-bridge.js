@@ -321,37 +321,25 @@ class ElevenLabsS2SBridge extends EventEmitter {
             type: 'conversation_initiation_client_data'
           };
 
-          const agentOverride = {};
-          if (this.tenant.instructions) {
-            agentOverride.prompt = { prompt: String(this.tenant.instructions) };
-          }
-          const greetingText = this.tenant.greetingInstructions || this.tenant.greetingMessage;
-          if (greetingText) {
-            agentOverride.first_message = String(greetingText);
-          }
-
-          if (Object.keys(agentOverride).length > 0) {
-            initPayload.conversation_config_override = {
-              agent: agentOverride
-            };
-            if (this.tenant.elevenlabsVoiceId && this.tenant.elevenlabsVoiceId !== 'Custom') {
-              initPayload.conversation_config_override.tts = {
-                voice_id: this.tenant.elevenlabsVoiceId
-              };
+          // conversation_config_override só é enviado se o usuário habilitar explicitamente
+          // no tenant (allowElevenOverrides), pois a ElevenLabs derruba a chamada (Code 1008)
+          // se o agente publicado não tiver os toggles de segurança habilitados no painel.
+          if (this.tenant.allowElevenOverrides) {
+            const agentOverride = {};
+            if (this.tenant.instructions) {
+              agentOverride.prompt = { prompt: String(this.tenant.instructions) };
+            }
+            const greetingText = this.tenant.greetingInstructions || this.tenant.greetingMessage;
+            if (greetingText) {
+              agentOverride.first_message = String(greetingText);
+            }
+            if (Object.keys(agentOverride).length > 0) {
+              initPayload.conversation_config_override = { agent: agentOverride };
             }
           }
 
-          initPayload.dynamic_variables = {
-            caller_id: String(this.caller || ''),
-            called_number: String(this.called || ''),
-            tenant_id: String(this.tenant?.id || 'default'),
-            tenant_name: String(this.tenant?.name || '')
-          };
-
           this.elevenSocket.send(JSON.stringify(initPayload));
-          console.log(
-            `[${this.callId}] 📤 Enviado conversation_initiation_client_data com conversation_config_override (Prompt: ${this.tenant.instructions ? 'SIM' : 'NÃO'} | FirstMessage: ${greetingText ? 'SIM' : 'NÃO'}).`
-          );
+          console.log(`[${this.callId}] 📤 Enviado conversation_initiation_client_data para acionar saudação inicial.`);
 
           if (this.tenant.instructions) {
             this.elevenSocket.send(
