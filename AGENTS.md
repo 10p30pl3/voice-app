@@ -30,3 +30,8 @@ Todo motor de IA conversacional integrado ao gateway (como [`OpenAIS2SBridge`](f
    - **DTMF**: Captura via ESL com debounce (`1200ms` ou envio imediato com `#`) e suporte a `sendDtmf(digits, direction)` (`inbound` e `outbound`).
    - **Comandos de Chamada**: `setMute`, `setHold`, `transfer` (`blind` e `refer`), `say`, `interruptAgent`, `playAudioFile` e `getCallInfo(includeTranscript)` com contrato padronizado para o dashboard.
    - **Timers de Segurança & Custos**: Aviso prévio falado aos ~170s (`warningDurationTimer`), desligamento rígido aos 180s (`maxDurationTimer`) e contabilização em [`aiCostTracker`](file:///Users/macm/Library/CloudStorage/OneDrive-VollSolutions/Documents/code/voice-app/utils/ai-cost-tracker.js).
+
+## Prompt Padrão de Teste para Todos os Agentes
+
+Todos os agentes (existentes e novos) utilizam como padrão o prompt institucional de atendimento e qualificação da **Voll Solutions** (`DEFAULT_VOLL_PROMPT` em [`utils/tenant-manager.js`](file:///Users/macm/Library/CloudStorage/OneDrive-VollSolutions/Documents/code/voice-app/utils/tenant-manager.js) e `VOLL_DEFAULT_PROMPT` em [`public/dashboard.html`](file:///Users/macm/Library/CloudStorage/OneDrive-VollSolutions/Documents/code/voice-app/public/dashboard.html)), tanto nos motores OpenAI Realtime (`session.update.instructions`) quanto ElevenLabs STS (`contextual_update`).
+

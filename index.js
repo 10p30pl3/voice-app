@@ -1226,10 +1226,10 @@ class OpenAIS2SBridge {
       };
     }
 
-    if (this.tenant.openaiPromptId) {
-      sessionUpdate.session.prompt = { id: this.tenant.openaiPromptId };
-    } else if (this.tenant.instructions) {
+    if (this.tenant.instructions) {
       sessionUpdate.session.instructions = this.tenant.instructions;
+    } else if (this.tenant.openaiPromptId) {
+      sessionUpdate.session.prompt = { id: this.tenant.openaiPromptId };
     }
 
     this.openaiSocket.send(JSON.stringify(sessionUpdate));

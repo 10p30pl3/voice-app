@@ -387,6 +387,16 @@ class ElevenLabsS2SBridge extends EventEmitter {
           this.elevenSocket.send(JSON.stringify(initPayload));
           console.log(`[${this.callId}] 📤 Enviado conversation_initiation_client_data para acionar saudação inicial.`);
 
+          if (this.tenant.instructions) {
+            this.elevenSocket.send(
+              JSON.stringify({
+                type: 'contextual_update',
+                text: String(this.tenant.instructions)
+              })
+            );
+            console.log(`[${this.callId}] 📤 Enviado contextual_update com as instruções do Agente para a ElevenLabs.`);
+          }
+
           // Se o agente na ElevenLabs não tiver saudação inicial configurada (nenhum byte de áudio em 3.5s), abre o canal do cliente automaticamente
           setTimeout(() => {
             if (this.isGreetingInProgress && this.greetingAudioBytes === 0 && !this.isTerminated) {
