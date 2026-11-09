@@ -8,6 +8,7 @@
     "openaiModel": "gpt-realtime-mini",
     "openaiPromptId": "pmpt_prompt_da_clinica",
     "instructions": "Você é a secretária virtual da Clínica Saúde. Agende consultas de forma acolhedora.",
+    "greetingInstructions": "Diga cordialmente: 'Olá! Sou a secretária virtual da Clínica Saúde, como posso te ajudar hoje?'",
     "voice": "shimmer",
     "audioCodec": "pcm24k",
     "maxDurationSec": 600,

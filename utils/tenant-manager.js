@@ -171,6 +171,7 @@ class TenantManager {
       elevenlabsModel: process.env.ELEVENLABS_MODEL || 'eleven_turbo_v2_5',
       elevenlabsApiKey: process.env.ELEVENLABS_API_KEY || '',
       instructions: process.env.OPENAI_AGENT_INSTRUCTIONS || DEFAULT_VOLL_PROMPT,
+      greetingInstructions: process.env.GREETING_INSTRUCTIONS || 'Diga cordialmente de forma curta e amigável: \'Olá! Sou o assistente virtual da Voll Solutions. Como posso ajudar você hoje?\'',
       voice: process.env.OPENAI_VOICE || 'marin',
       audioCodec: process.env.AUDIO_CODEC_MODE || 'pcm24k', // 'pcm24k' (16-bit 24kHz HD com FIR Blackman 31-tap) ou 'g711_ulaw'
       maxDurationSec: parseInt(process.env.MAX_CALL_DURATION_SEC || '180', 10),
@@ -381,6 +382,9 @@ class TenantManager {
       extension: data.extension !== undefined
         ? (String(data.extension || '').trim() || null)
         : (existing.extension || (data.id === 'default' ? '9000' : null)),
+      greetingInstructions: data.greetingInstructions !== undefined
+        ? (String(data.greetingInstructions || '').trim() || null)
+        : (existing.greetingInstructions || defaultTenant.greetingInstructions),
       crosstalkFilter: {
         ...defaultTenant.crosstalkFilter,
         ...(existing.crosstalkFilter || {}),

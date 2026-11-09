@@ -3757,6 +3757,12 @@
             </div>
 
             <div class="form-group" style="grid-column: span 2;">
+              <label>Frase / Instrução de Saudação Inicial (OpenAI)</label>
+              <input type="text" id="tenant-greeting-instructions" placeholder="ex: Diga exatamente: 'Olá! Sou o assistente virtual da Voll Solutions. Como posso ajudar?'">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Instrução falada imediatamente pela IA assim que o canal atende no ramal (antes do cliente falar).</small>
+            </div>
+
+            <div class="form-group" style="grid-column: span 2;">
               <label>OpenAI Prompt ID (Opcional)</label>
               <input type="text" id="tenant-prompt-id" placeholder="pmpt_699c6d29...">
               <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Se preenchido, sincroniza o prompt configurado no painel da OpenAI</small>
@@ -6613,6 +6619,8 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
         if (extensionInput) extensionInput.value = t.extension || (isDefault ? '9000' : '');
         didsInput.value = Array.isArray(t.dids) ? t.dids.join(', ') : (t.dids || '*');
         instrInput.value = t.instructions || '';
+        const greetingInput = document.getElementById('tenant-greeting-instructions');
+        if (greetingInput) greetingInput.value = t.greetingInstructions || '';
         promptIdInput.value = t.openaiPromptId || '';
         voiceSelect.value = t.voice || 'alloy';
         modelSelect.value = t.openaiModel || 'gpt-realtime-2.1-mini';
@@ -6641,6 +6649,8 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
         if (extensionInput) extensionInput.value = '';
         didsInput.value = '';
         instrInput.value = PROMPT_TEMPLATES.atendente;
+        const greetingInput = document.getElementById('tenant-greeting-instructions');
+        if (greetingInput) greetingInput.value = "Diga cordialmente de forma curta e amigável: 'Olá! Sou o assistente virtual da Voll Solutions. Como posso ajudar você hoje?'";
         promptIdInput.value = '';
         voiceSelect.value = 'alloy';
         modelSelect.value = 'gpt-realtime-2.1-mini';
@@ -6678,6 +6688,7 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       const rawDids = document.getElementById('tenant-dids').value.trim();
       const dids = rawDids ? rawDids.split(',').map(s => s.trim()).filter(Boolean) : ['*'];
       const instructions = document.getElementById('tenant-instructions').value.trim();
+      const greetingInstructions = document.getElementById('tenant-greeting-instructions')?.value.trim() || null;
       const stsEngine = document.getElementById('tenant-sts-engine')?.value || 'openai';
       const openaiPromptId = document.getElementById('tenant-prompt-id').value.trim() || null;
       const voice = document.getElementById('tenant-voice').value;
@@ -6702,6 +6713,7 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
         extension,
         dids,
         instructions,
+        greetingInstructions,
         stsEngine,
         openaiPromptId,
         voice,

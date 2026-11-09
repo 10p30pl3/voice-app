@@ -1291,7 +1291,7 @@ class OpenAIS2SBridge {
     const responseCreate = {
       type: 'response.create',
       response: {
-        instructions: 'Dê as boas-vindas cordialmente de forma curta e amigável e pergunte em que pode ajudar hoje.'
+        instructions: this.tenant?.greetingInstructions || this.tenant?.greetingMessage || 'Dê as boas-vindas cordialmente de forma curta e amigável e pergunte em que pode ajudar hoje.'
       }
     };
     this.greetingResponsePending = true;
