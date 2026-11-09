@@ -558,8 +558,11 @@ class ElevenLabsS2SBridge extends EventEmitter {
           );
           return;
         }
-        if (this.isSecondaryVoiceBlocked) {
-          console.log(`[${this.callId}] 🛡️ [BIOMETRIA] interruption_event ignorado (voz secundária/fundo bloqueada).`);
+        const isAgentReallyPlaying = Boolean(this.isAgentTalking || (this.mediaBridge && this.mediaBridge.isPlaying));
+        const isLegitSpeaker = !this.isSecondaryVoiceBlocked &&
+          (!this.crosstalkFilter || this.crosstalkFilter.isActivelySpeaking(isAgentReallyPlaying));
+        if (!isLegitSpeaker) {
+          console.log(`[${this.callId}] 🛡️ [BIOMETRIA] interruption_event ignorado (voz secundária/fundo bloqueada ou energia insuficiente).`);
           return;
         }
         console.log(`[${this.callId}] ⚡ Interrupção recebida da ElevenLabs.`);
@@ -835,9 +838,12 @@ class ElevenLabsS2SBridge extends EventEmitter {
       );
 
       // Timeout de segurança dinâmico para garantir abertura rápida do canal caso haja lentidão na IA
-      const safetyGraceMs = Math.min(4500, Math.max(2500, (this.bargeinGraceSec || 3) * 1000));
+      const safetyGraceMs = Math.max(8000, (this.bargeinGraceSec || 8) * 1000);
       this.greetingSafetyTimer = setTimeout(() => {
         if (this.isGreetingInProgress && !this.isTerminated) {
+          if (this.greetingAudioBytes > 0 && this.greetingFinishTimer) {
+            return;
+          }
           console.warn(`[${this.callId}] ⏱️ [BARGE-IN DINÂMICO] Timeout de segurança de saudação (${safetyGraceMs}ms). Liberando canal do cliente.`);
           this.openCustomerChannel('safety_timeout');
         }
@@ -1016,10 +1022,12 @@ class ElevenLabsS2SBridge extends EventEmitter {
         }
 
         // Filtros de Voz de Fundo Selecionáveis: 'atual' (DSP), 'wespeaker' (CAM++) ou 'ecapa' (ECAPA-TDNN)
+        const isAgentReallyPlaying = Boolean(this.isAgentTalking || (this.mediaBridge && this.mediaBridge.isPlaying));
+
         let isPrimaryVoiceDsp = true;
         if (this.isDspFilterActive && this.crosstalkFilter) {
           isPrimaryVoiceDsp = !this.isToneProbe && !amdStillDeciding && !isGraceActive
-            ? this.crosstalkFilter.process(buffer)
+            ? this.crosstalkFilter.process(buffer, isAgentReallyPlaying)
             : false;
 
           if (!this.dynamicEcapaSwitched && this.crosstalkFilter.noiseFloor >= 200) {
@@ -1045,21 +1053,20 @@ class ElevenLabsS2SBridge extends EventEmitter {
         }
 
         // Proteção contra corte de canal: só substitui por silêncio em carência inicial, AMD,
-        // tom probe, voz secundária neural confirmada ou ruído residual puro (<200 RMS).
+        // tom probe, voz secundária neural confirmada ou ruído/TV enquanto o agente fala.
         let effectiveBuffer = buffer;
         if (isGraceActive || this.isToneProbe || amdStillDeciding) {
           effectiveBuffer = Buffer.alloc(buffer.length);
         } else if (this.isNeuralFilterActive && this.isSecondaryVoiceBlocked) {
           effectiveBuffer = Buffer.alloc(buffer.length);
-        } else if (this.isDspFilterActive && !isPrimaryVoiceDsp && (this.crosstalkFilter?.lastRms || 0) < 200) {
+        } else if (this.isDspFilterActive && !isPrimaryVoiceDsp && (isAgentReallyPlaying || (this.crosstalkFilter?.lastRms || 0) < 400)) {
           effectiveBuffer = Buffer.alloc(buffer.length);
         }
 
         // Barge-in Instantâneo (<20ms): só interrompe se for fala ativa legítima e fora da carência
         const isActivelySpeaking = this.crosstalkFilter
-          ? this.crosstalkFilter.isActivelySpeaking()
+          ? this.crosstalkFilter.isActivelySpeaking(isAgentReallyPlaying)
           : this.frameVad.process(buffer);
-        const isAgentReallyPlaying = this.isAgentTalking || (this.mediaBridge && this.mediaBridge.isPlaying);
         if (isPrimaryVoice && isActivelySpeaking && isAgentReallyPlaying && this.canTriggerBargeIn()) {
           this.triggerBargeIn(this.isNeuralFilterActive ? `biometric_${this.crosstalkMode}` : 'local_biometric_vad');
         }

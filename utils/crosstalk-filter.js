@@ -11,14 +11,14 @@
  */
 class CrosstalkFilter {
   constructor({
-    ratio = 0.45,               // Vozes de fundo abaixo de ~45% do envelope de voz do usuário são bloqueadas
-    initialUserRms = 1800,      // Estimativa inicial do envelope de fala do usuário principal (Int16 PCM 8kHz)
-    minUserRms = 1200,          // Limite inferior para a referência de voz principal
-    maxUserRms = 9000,          // Limite superior de volume
-    maxThresholdRms = 4500,     // Teto máximo do gate proporcional a vozes próximas ao microfone
-    minFloorRms = 800,          // Piso mínimo absoluto para rejeitar vozes de fundo antes da 1ª fala
-    attackFrames = 3,           // Exige 3 frames consecutivos (60ms) acima do limiar para abrir o gate
-    hangoverMs = 400,           // Janela de sustentação (400ms) para não picotar sílabas suaves
+    ratio = 0.35,               // Vozes de fundo abaixo de ~35% do envelope de voz do usuário são bloqueadas
+    initialUserRms = 1600,      // Estimativa inicial do envelope de fala do usuário principal (Int16 PCM 8kHz)
+    minUserRms = 800,           // Limite inferior para a referência de voz principal
+    maxUserRms = 8000,          // Limite superior de volume
+    maxThresholdRms = 3500,     // Teto máximo do gate proporcional a vozes próximas ao microfone
+    minFloorRms = 350,          // Piso mínimo absoluto para rejeitar vozes de fundo antes da 1ª fala
+    attackFrames = 2,           // 2 frames consecutivos (40ms) acima do limiar para abrir o gate
+    hangoverMs = 500,           // Janela de sustentação (500ms) para não picotar finais de palavras e pausas naturais
     frameDurationMs = 20        // Duração de cada chunk RTP (20ms = 160 samples a 8kHz)
   } = {}) {
     this.ratio = ratio;
@@ -140,16 +140,24 @@ class CrosstalkFilter {
    * Processa um chunk de áudio e determina se pertence ao titular cadastrado
    * ou se é uma voz de fundo com características vocais divergentes.
    * @param {Buffer} buffer - Chunk PCM16 de 20ms
-   * @returns {boolean} true se deve passar para a OpenAI, false se deve ser silenciado (voz de fundo)
+   * @param {boolean} [isAgentTalking=false] - Se o agente está falando (rejeição de TV e falso barge-in)
+   * @returns {boolean} true se deve passar para a IA, false se deve ser silenciado (voz de fundo / TV)
    */
-  process(buffer) {
+  process(buffer, isAgentTalking = false) {
     const feat = this.extractFeatures(buffer);
     this.lastRms = feat.rms;
 
-    // Silêncio de linha ou ruído desprezível
-    if (feat.rms < 200) {
+    // Atualização adaptativa do piso de ruído contínuo da sala (TV, trânsito, ar condicionado)
+    if (!feat.voiced && feat.rms < 600) {
+      const adaptAlpha = feat.rms < this.noiseFloor ? 0.20 : 0.03;
+      this.noiseFloor = adaptAlpha * feat.rms + (1 - adaptAlpha) * this.noiseFloor;
+    }
+
+    // Silêncio de linha ou ruído desprezível (TV baixa no fundo durante fala do agente)
+    const noiseCutoff = isAgentTalking ? 350 : 180;
+    if (feat.rms < noiseCutoff) {
       this.consecutiveAbove = 0;
-      if (this.hangoverCounter > 0) {
+      if (this.hangoverCounter > 0 && !isAgentTalking) {
         this.hangoverCounter--;
         this.isGateOpen = true;
         this.passedFramesCount++;
@@ -177,8 +185,8 @@ class CrosstalkFilter {
       : feat.lowRatio;
 
     // FASE 1: Calibração da Assinatura Biométrica (Voiceprint Enrollment)
-    // Aprende as características acústicas da voz dominante da chamada
-    const isDominantFrame = feat.voiced && feat.rms >= Math.max(1100, this.userVoiceRms * 0.50) && currentLowRatio >= 0.30;
+    // SÓ cadastra se o AGENTE NÃO ESTIVER FALANDO e houver proximidade acústica real do usuário (evita cadastrar TV/eco)
+    const isDominantFrame = !isAgentTalking && feat.voiced && feat.rms >= Math.max(900, this.userVoiceRms * 0.45) && currentLowRatio >= 0.28;
     if (isDominantFrame) {
       if (!this.enrolled) {
         this.ownerPitchHz = this.enrollCount === 0 ? currentPitch : (0.3 * currentPitch + 0.7 * this.ownerPitchHz);
@@ -202,25 +210,25 @@ class CrosstalkFilter {
     }
 
     // FASE 2: Verificação Biométrica (Pitch F0 + Efeito de Proximidade)
+    // Janela de tolerância expandida (45%) para acomodar variações naturais de entonação e ênfase
     const pitchDiff = (this.enrolled && currentPitch > 0)
       ? Math.abs(currentPitch - this.ownerPitchHz) / this.ownerPitchHz
       : 0.5;
-    const isBiometricMatch = this.enrolled && feat.voiced && pitchDiff <= 0.34 && currentLowRatio >= (this.ownerLowRatio - 0.20);
+    const isBiometricMatch = this.enrolled && feat.voiced && pitchDiff <= 0.45 && currentLowRatio >= (this.ownerLowRatio - 0.25);
 
     // Limiar dinâmico inteligente:
-    // - Antes da calibração (fase de saudação/primeira fala): usa o ratio padrão sobre a estimativa inicial
-    // - Após a calibração biométrica:
-    //   * Se as características coincidem com a voz do titular:
-    //     limiar adaptativo baixo (permite falar naturalmente e suavemente a partir de ~300-950 RMS)
-    //   * Se as características são de OUTRA pessoa / TV / ruído secundário:
-    //     limiar alto (60% do pico do titular, mínimo 1.200 RMS) -> BLOQUEIA COMPLETAMENTE!
+    // - Durante fala do agente (barge-in): exige energia firme e voz real para não cortar por TV de fundo
+    // - Com voz reconhecida (fora do agente): limiar suave adaptativo (200-600 RMS)
+    // - Voz secundária / fundo: rejeita energia abaixo de 450-1000 RMS
     const dynamicThreshold = this.enrolled
       ? (isBiometricMatch
-          ? Math.max(300, Math.min(950, this.userVoiceRms * 0.22))
-          : Math.max(1200, this.userVoiceRms * 0.60))
-      : Math.max(300, this.userVoiceRms * this.ratio);
+          ? (isAgentTalking ? Math.max(700, this.userVoiceRms * 0.35) : Math.max(200, Math.min(600, this.userVoiceRms * 0.18)))
+          : (this.isGateOpen && !isAgentTalking
+              ? Math.max(250, Math.min(700, this.userVoiceRms * 0.22))
+              : (isAgentTalking ? Math.max(850, this.userVoiceRms * 0.50) : Math.max(450, Math.min(1000, this.userVoiceRms * 0.45)))))
+      : (isAgentTalking ? Math.max(850, this.userVoiceRms * 0.50) : Math.max(300, this.userVoiceRms * this.ratio));
 
-    const requiredAttack = isBiometricMatch ? 1 : this.attackFrames;
+    const requiredAttack = (isBiometricMatch || (this.isGateOpen && !isAgentTalking)) ? 1 : (isAgentTalking ? Math.max(3, this.attackFrames) : this.attackFrames);
     if (feat.rms >= dynamicThreshold) {
       this.consecutiveAbove++;
       if (this.isGateOpen || this.consecutiveAbove >= requiredAttack) {
@@ -236,8 +244,8 @@ class CrosstalkFilter {
 
     this.consecutiveAbove = 0;
 
-    // Sustentação (hangover de 400ms) para não picotar finais de palavras
-    if (this.hangoverCounter > 0) {
+    // Sustentação (hangover) para manter o canal aberto entre sílabas e pausas breves (não mantido se o agente falar)
+    if (this.hangoverCounter > 0 && !isAgentTalking) {
       this.hangoverCounter--;
       this.isGateOpen = true;
       this.passedFramesCount++;
@@ -252,9 +260,14 @@ class CrosstalkFilter {
   /**
    * Indica se o locutor está falando ativamente no frame atual (energia acima do limiar)
    * e não apenas na cauda de sustentação passiva (hangover).
+   * @param {boolean} [isAgentTalking=false]
    */
-  isActivelySpeaking() {
-    return this.isGateOpen && this.consecutiveAbove > 0;
+  isActivelySpeaking(isAgentTalking = false) {
+    if (!this.isGateOpen || this.consecutiveAbove === 0) return false;
+    if (isAgentTalking) {
+      return this.consecutiveAbove >= 2 && this.lastRms >= 700;
+    }
+    return true;
   }
 
   /**

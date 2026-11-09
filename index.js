@@ -670,10 +670,13 @@ class OpenAIS2SBridge {
       }
 
       if (body.type === 'input_audio_buffer.speech_started') {
-        if (!this.isSecondaryVoiceBlocked) {
+        const isAgentReallyPlaying = Boolean(this.isAgentTalking || (this.mediaBridge && this.mediaBridge.isPlaying));
+        const isLegitSpeaker = !this.isSecondaryVoiceBlocked &&
+          (!this.crosstalkFilter || this.crosstalkFilter.isActivelySpeaking(isAgentReallyPlaying));
+        if (isLegitSpeaker) {
           this.triggerBargeIn('speech_started');
         } else {
-          console.log(`[${this.callId}] 🛡️ [BIOMETRIA] speech_started ignorado (voz secundária/fundo bloqueada).`);
+          console.log(`[${this.callId}] 🛡️ [BIOMETRIA] speech_started ignorado (voz secundária/fundo bloqueada ou energia insuficiente).`);
         }
       }
     } catch (err) {
@@ -831,9 +834,12 @@ class OpenAIS2SBridge {
       );
 
       // Timeout de segurança dinâmico para garantir abertura rápida do canal caso haja lentidão na IA
-      const safetyGraceMs = Math.min(4500, Math.max(2500, (this.bargeinGraceSec || 3) * 1000));
+      const safetyGraceMs = Math.max(8000, (this.bargeinGraceSec || 8) * 1000);
       this.greetingSafetyTimer = setTimeout(() => {
         if (this.isGreetingInProgress && !this.isTerminated) {
+          if (this.greetingAudioBytes > 0 && this.greetingFinishTimer) {
+            return;
+          }
           console.warn(`[${this.callId}] ⏱️ [BARGE-IN DINÂMICO] Timeout de segurança de saudação (${safetyGraceMs}ms). Liberando canal do cliente.`);
           this.openCustomerChannel('safety_timeout');
         }
@@ -1034,11 +1040,13 @@ class OpenAIS2SBridge {
         }
 
         // Filtros de Voz de Fundo Selecionáveis: 'atual' (DSP), 'wespeaker' (CAM++) ou 'ecapa' (ECAPA-TDNN)
+        const isAgentReallyPlaying = Boolean(this.isAgentTalking || (this.mediaBridge && this.mediaBridge.isPlaying));
+
         // 1. Filtro DSP ('atual'):
         let isPrimaryVoiceDsp = true;
         if (this.isDspFilterActive && this.crosstalkFilter) {
           isPrimaryVoiceDsp = !this.isToneProbe && !amdStillDeciding && !isGraceActive
-            ? this.crosstalkFilter.process(buffer)
+            ? this.crosstalkFilter.process(buffer, isAgentReallyPlaying)
             : false;
 
           // Monitoramento em tempo real do piso de ruído durante a chamada:
@@ -1069,21 +1077,20 @@ class OpenAIS2SBridge {
 
         // Proteção contra corte de canal: só substitui por silêncio em carência inicial, AMD,
         // tom probe, voz secundária neural confirmada ou ruído residual puro (<200 RMS).
-        // Quando o cliente está falando, o áudio é preservado integralmente para a IA!
+        // Quando o agente está falando, ruídos ou voz não-titular são silenciados para evitar auto-barge-in e interrupção por TV.
         let effectiveBuffer = buffer;
         if (isGraceActive || this.isToneProbe || amdStillDeciding) {
           effectiveBuffer = Buffer.alloc(buffer.length);
         } else if (this.isNeuralFilterActive && this.isSecondaryVoiceBlocked) {
           effectiveBuffer = Buffer.alloc(buffer.length);
-        } else if (this.isDspFilterActive && !isPrimaryVoiceDsp && (this.crosstalkFilter?.lastRms || 0) < 200) {
+        } else if (this.isDspFilterActive && !isPrimaryVoiceDsp && (isAgentReallyPlaying || (this.crosstalkFilter?.lastRms || 0) < 400)) {
           effectiveBuffer = Buffer.alloc(buffer.length);
         }
 
         // Barge-in Instantâneo (<20ms): só interrompe se for fala ativa legítima (não cauda/hangover silencioso)
         const isActivelySpeaking = this.crosstalkFilter
-          ? this.crosstalkFilter.isActivelySpeaking()
+          ? this.crosstalkFilter.isActivelySpeaking(isAgentReallyPlaying)
           : this.frameVad.process(buffer);
-        const isAgentReallyPlaying = this.isAgentTalking || (this.mediaBridge && this.mediaBridge.isPlaying);
         if (isPrimaryVoice && isActivelySpeaking && isAgentReallyPlaying && this.canTriggerBargeIn()) {
           this.triggerBargeIn(this.isNeuralFilterActive ? `biometric_${this.crosstalkMode}` : 'local_biometric_vad');
         }
