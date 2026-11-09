@@ -317,9 +317,41 @@ class ElevenLabsS2SBridge extends EventEmitter {
         this.elevenReady = true;
 
         try {
-          const initPayload = { type: 'conversation_initiation_client_data' };
+          const initPayload = {
+            type: 'conversation_initiation_client_data'
+          };
+
+          const agentOverride = {};
+          if (this.tenant.instructions) {
+            agentOverride.prompt = { prompt: String(this.tenant.instructions) };
+          }
+          const greetingText = this.tenant.greetingInstructions || this.tenant.greetingMessage;
+          if (greetingText) {
+            agentOverride.first_message = String(greetingText);
+          }
+
+          if (Object.keys(agentOverride).length > 0) {
+            initPayload.conversation_config_override = {
+              agent: agentOverride
+            };
+            if (this.tenant.elevenlabsVoiceId && this.tenant.elevenlabsVoiceId !== 'Custom') {
+              initPayload.conversation_config_override.tts = {
+                voice_id: this.tenant.elevenlabsVoiceId
+              };
+            }
+          }
+
+          initPayload.dynamic_variables = {
+            caller_id: String(this.caller || ''),
+            called_number: String(this.called || ''),
+            tenant_id: String(this.tenant?.id || 'default'),
+            tenant_name: String(this.tenant?.name || '')
+          };
+
           this.elevenSocket.send(JSON.stringify(initPayload));
-          console.log(`[${this.callId}] 📤 Enviado conversation_initiation_client_data para acionar saudação inicial.`);
+          console.log(
+            `[${this.callId}] 📤 Enviado conversation_initiation_client_data com conversation_config_override (Prompt: ${this.tenant.instructions ? 'SIM' : 'NÃO'} | FirstMessage: ${greetingText ? 'SIM' : 'NÃO'}).`
+          );
 
           if (this.tenant.instructions) {
             this.elevenSocket.send(
@@ -693,15 +725,38 @@ class ElevenLabsS2SBridge extends EventEmitter {
     const role = speaker === 'Atendente' ? 'Atendente' : 'Cliente';
     const timestamp = formatDateTime();
     const formatted = `[${timestamp}] ${role}: ${cleanText}`;
-    let entry = { timestamp, speaker: role, text: cleanText, formatted };
+
+    let delayMs = null;
+    let delayLabel = null;
+    if (role === 'Cliente') {
+      this.lastClientTurnTime = now;
+    } else {
+      if (this.lastClientTurnTime) {
+        delayMs = Math.max(0, now - this.lastClientTurnTime);
+        this.lastClientTurnTime = null;
+        if (delayMs === 0) {
+          delayLabel = 'Delay: < 1s';
+        } else if (delayMs < 1000) {
+          delayLabel = `Delay: ${delayMs}ms`;
+        } else {
+          const sec = delayMs / 1000;
+          delayLabel = `Delay: ${sec >= 10 ? Math.round(sec) : sec.toFixed(1)}s`;
+        }
+      } else if (!this.hasHadClientTurn) {
+        delayLabel = 'Saudação';
+      }
+      this.hasHadClientTurn = true;
+    }
+
+    let entry = { timestamp, speaker: role, text: cleanText, delayMs, delayLabel, formatted };
 
     if (this.recorder && !this.recorder.isStopped && !this.recorder.isPaused) {
-      const recEntry = this.recorder.addTranscript(role, cleanText);
+      const recEntry = this.recorder.addTranscript(role, cleanText, new Date(), { delayMs, delayLabel });
       if (recEntry) {
         entry = recEntry;
       }
     } else {
-      console.log(`[${this.callId}] 📝 ${formatted}`);
+      console.log(`[${this.callId}] 📝 ${formatted}${delayLabel ? ` [${delayLabel}]` : ''}`);
     }
 
     this.transcriptLog.push(entry);
