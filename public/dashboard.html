@@ -3310,7 +3310,11 @@
 
         <div class="form-group">
           <label>Modelo Padrão (Default Model)</label>
-          <select id="aiprov-default-model"></select>
+          <div style="display: flex; gap: 8px;">
+            <select id="aiprov-default-model" style="flex: 1;"></select>
+            <button type="button" class="btn btn-sm" onclick="promptAddNewModel()" title="Adicionar nova versão ou modelo customizado">➕ Novo Modelo</button>
+          </div>
+          <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Escolha o modelo padrão ou clique em <strong>+ Novo Modelo</strong> para cadastrar novas versões (ex: gpt-live-1, gpt-realtime-2.1).</small>
         </div>
 
         <div class="form-group" id="group-aiprov-voice">
@@ -3728,6 +3732,8 @@
               <select id="tenant-model">
                 <option value="gpt-realtime-2.1-mini">gpt-realtime-2.1-mini (Mais Recente 2.1 / Rápido & Baixa Latência)</option>
                 <option value="gpt-realtime-2.1">gpt-realtime-2.1 (Mais Recente 2.1 Flagship / Raciocínio & Máxima Capacidade)</option>
+                <option value="gpt-live-1">gpt-live-1 (OpenAI Live Flagship)</option>
+                <option value="gpt-live-1-mini">gpt-live-1-mini (OpenAI Live Mini)</option>
                 <option value="gpt-realtime-2">gpt-realtime-2 (Realtime 2.0 Flagship)</option>
                 <option value="gpt-realtime-mini">gpt-realtime-mini (Legado 1.0 Mini)</option>
                 <option value="gpt-realtime">gpt-realtime (Legado 1.0)</option>
@@ -8424,6 +8430,45 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       el.type = el.type === 'password' ? 'text' : 'password';
     }
 
+    function promptAddNewModel() {
+      const provId = document.getElementById('aiprov-id').value;
+      const placeholder = provId === 'elevenlabs' ? 'ex: eleven_turbo_v2_5' : 'ex: gpt-live-1 ou gpt-realtime-2.1';
+      const newModel = prompt(`Informe o identificador da nova versão/modelo para o provedor ${provId}:`, placeholder);
+      if (!newModel || !newModel.trim()) return;
+
+      const cleanModel = newModel.trim();
+      const modelSelect = document.getElementById('aiprov-default-model');
+      if (modelSelect) {
+        // Verifica se já existe
+        let exists = false;
+        for (let i = 0; i < modelSelect.options.length; i++) {
+          if (modelSelect.options[i].value === cleanModel) {
+            modelSelect.selectedIndex = i;
+            exists = true;
+            break;
+          }
+        }
+        if (!exists) {
+          const opt = document.createElement('option');
+          opt.value = cleanModel;
+          opt.textContent = `${cleanModel} (Novo)`;
+          opt.selected = true;
+          modelSelect.insertBefore(opt, modelSelect.firstChild);
+        }
+      }
+
+      // Adiciona também na lista de modelos do cache local
+      const p = aiProvidersCache.find(x => x.id === provId);
+      if (p) {
+        if (!p.models) p.models = [];
+        if (!p.models.includes(cleanModel)) {
+          p.models.unshift(cleanModel);
+        }
+      }
+
+      showToast(`Modelo "${cleanModel}" adicionado! Clique em "Salvar Configurações" para persistir.`, 'success');
+    }
+
     async function saveAiProviderConfig() {
       const id = document.getElementById('aiprov-id').value;
       if (!id) return;
@@ -8433,12 +8478,15 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       const defaultModel = document.getElementById('aiprov-default-model').value;
       const defaultVoice = document.getElementById('aiprov-default-voice').value;
       const audioCodec = document.getElementById('aiprov-codec')?.value || 'g711_ulaw';
+      const p = aiProvidersCache.find(x => x.id === id);
+      const models = p && p.models ? p.models : [];
 
       const payload = {
         active,
         defaultModel,
         defaultVoice,
-        audioCodec
+        audioCodec,
+        models
       };
 
       if (apiKey) payload.apiKey = apiKey;

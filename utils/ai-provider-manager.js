@@ -12,6 +12,8 @@ const DEFAULT_AI_PROVIDERS = [
     models: [
       'gpt-realtime-2.1-mini',
       'gpt-realtime-2.1',
+      'gpt-live-1',
+      'gpt-live-1-mini',
       'gpt-realtime-2',
       'gpt-realtime-mini',
       'gpt-realtime'
@@ -139,6 +141,24 @@ class AiProviderManager {
     return this.providers.get(id) || null;
   }
 
+  addModel(providerId, newModel) {
+    const existing = this.providers.get(providerId);
+    if (!existing) {
+      throw new Error(`Provedor desconhecido: ${providerId}`);
+    }
+    const cleanModel = String(newModel || '').trim();
+    if (!cleanModel) {
+      throw new Error('Nome do modelo inválido');
+    }
+    if (!existing.models) existing.models = [];
+    if (!existing.models.includes(cleanModel)) {
+      existing.models.unshift(cleanModel);
+    }
+    existing.defaultModel = cleanModel;
+    this.persist();
+    return this.mask(existing);
+  }
+
   update(id, data = {}) {
     const existing = this.providers.get(id);
     if (!existing) {
@@ -162,7 +182,17 @@ class AiProviderManager {
       active: data.active !== undefined ? Boolean(data.active) : existing.active
     };
 
-    if (data.defaultModel) updated.defaultModel = String(data.defaultModel).trim();
+    if (data.defaultModel) {
+      const modelClean = String(data.defaultModel).trim();
+      updated.defaultModel = modelClean;
+      if (!updated.models) updated.models = [];
+      if (!updated.models.includes(modelClean)) {
+        updated.models.unshift(modelClean);
+      }
+    }
+    if (Array.isArray(data.models) && data.models.length > 0) {
+      updated.models = Array.from(new Set([...data.models.map(m => String(m).trim()).filter(Boolean), ...(updated.models || [])]));
+    }
     if (data.defaultVoice) updated.defaultVoice = String(data.defaultVoice).trim();
     if (data.audioCodec) updated.audioCodec = String(data.audioCodec).trim();
 
