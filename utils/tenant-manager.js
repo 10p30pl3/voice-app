@@ -172,7 +172,7 @@ class TenantManager {
       elevenlabsApiKey: process.env.ELEVENLABS_API_KEY || '',
       instructions: process.env.OPENAI_AGENT_INSTRUCTIONS || DEFAULT_VOLL_PROMPT,
       voice: process.env.OPENAI_VOICE || 'marin',
-      audioCodec: process.env.AUDIO_CODEC_MODE || 'g711_ulaw', // 'g711_ulaw' (telefonia cristalina nativa) ou 'pcm24k'
+      audioCodec: process.env.AUDIO_CODEC_MODE || 'pcm24k', // 'pcm24k' (16-bit 24kHz HD com FIR Blackman 31-tap) ou 'g711_ulaw'
       maxDurationSec: parseInt(process.env.MAX_CALL_DURATION_SEC || '180', 10),
       maxConcurrentCalls: parseInt(process.env.MAX_CONCURRENT_CALLS_PER_TENANT || '200', 10),
       maxCallsPerSecond: parseInt(process.env.MAX_CPS_PER_TENANT || '30', 10),

@@ -240,8 +240,18 @@ class WsMediaBridge {
     this.channelUuid = null;
     this.stopped = false;
     this.isPlaying = false;
+    this.streamEnding = false;
     this.playbackChunkCount = 0;
     this.recorder = null;
+
+    // Pacer de transmissão (40ms / 640 bytes @ 8kHz L16):
+    // Evita bursts > 8KB no libwebsockets do mod_audio_fork, realocações de CircularBuffer
+    // e contenção de switch_mutex_trylock no dub_speech_frame (causa de chiados/dropouts RTP).
+    this.txQueue = [];
+    this.txRemainder = Buffer.alloc(0);
+    this.txPacerTimer = null;
+    this.txPacerStartTime = 0;
+    this.txFramesSent = 0;
   }
 
   setRecorder(recorder) {
@@ -269,12 +279,12 @@ class WsMediaBridge {
 
     const wsUrl = `ws://${AUDIO_FORK_WS_HOST}:${port}/media/${this.channelUuid}`;
     // Habilita streaming bidirecional de áudio binário em mod_audio_fork:
-    // argv[5]: bugname (default)
+    // argv[5]: bugname ('audio_fork' — obrigatório para compatibilidade com fork_session_stop_play em mod_audio_fork.c)
     // argv[6]: metadata ({})
     // argv[7]: bidirectionalAudio_enabled (true)
     // argv[8]: bidirectionalAudio_stream_enabled (true - aceita frames binários L16 do WebSocket para tocar no canal)
     // argv[9]: bidirectionalAudio_stream_samplerate (8000 Hz)
-    const cmd = `uuid_audio_fork ${this.channelUuid} start ${wsUrl} mono 8000 default {} true true 8000`;
+    const cmd = `uuid_audio_fork ${this.channelUuid} start ${wsUrl} mono 8000 audio_fork {} true true 8000`;
     console.log(`[${this.callId}] Iniciando mod_audio_fork na porta ${port}: ${cmd}`);
 
     if (!this.endpoint || typeof this.endpoint.api !== 'function') {
@@ -318,6 +328,7 @@ class WsMediaBridge {
     ws.on('close', () => {
       console.log(`[${this.callId}] WebSocket de mídia desconectado.`);
       this.socket = null;
+      this.stopTxPacer(true);
     });
 
     ws.on('error', (err) => {
@@ -328,33 +339,141 @@ class WsMediaBridge {
   startPlaybackStream() {
     if (this.stopped) return;
     this.isPlaying = true;
+    this.streamEnding = false;
     this.playbackChunkCount = 0;
     console.log(`[${this.callId}] 🔊 Iniciando playback via WebSocket bidirecional (mod_audio_fork)`);
   }
 
+  stopTxPacer(clearBuffers = false) {
+    if (this.txPacerTimer) {
+      clearInterval(this.txPacerTimer);
+      this.txPacerTimer = null;
+    }
+    if (clearBuffers) {
+      this.txQueue = [];
+      this.txRemainder = Buffer.alloc(0);
+      this.txFramesSent = 0;
+      this.txPacerStartTime = 0;
+    }
+  }
+
+  drainTxPacerTick() {
+    if (this.stopped || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      this.stopTxPacer(true);
+      return;
+    }
+
+    const FRAME_MS = 40;
+    const CUSHION_FRAMES = 3; // 120ms de pré-buffer constante no CircularBuffer do FreeSWITCH
+    const now = Date.now();
+    const elapsedMs = now - this.txPacerStartTime;
+    const targetFrames = Math.floor(elapsedMs / FRAME_MS) + CUSHION_FRAMES;
+
+    let sentThisTick = 0;
+    while (this.txFramesSent < targetFrames && this.txQueue.length > 0 && sentThisTick < 3) {
+      const frame = this.txQueue.shift();
+      try {
+        this.socket.send(frame);
+        this.txFramesSent++;
+        sentThisTick++;
+        this.playbackChunkCount++;
+        if (this.playbackChunkCount === 1) {
+          console.log(`[${this.callId}] 🔊 Primeiro frame cadenciado enviado via WS (${frame.length} bytes)`);
+        }
+      } catch (err) {
+        console.error(`[${this.callId}] Erro ao enviar frame cadenciado via WS:`, err.message);
+        break;
+      }
+    }
+
+    if (this.txQueue.length === 0) {
+      if (this.streamEnding) {
+        if (this.txRemainder.length >= 2) {
+          const evenLen = this.txRemainder.length & ~1;
+          const tailFrame = this.txRemainder.subarray(0, evenLen);
+          this.txRemainder = Buffer.alloc(0);
+          try {
+            this.socket.send(tailFrame);
+            this.txFramesSent++;
+            this.playbackChunkCount++;
+          } catch {}
+        } else {
+          this.txRemainder = Buffer.alloc(0);
+        }
+        console.log(`[${this.callId}] 🔇 Playback encerrado (${this.playbackChunkCount} frames enviados)`);
+        this.stopTxPacer(true);
+        this.isPlaying = false;
+        this.streamEnding = false;
+      } else if (targetFrames > this.txFramesSent + CUSHION_FRAMES) {
+        // Evita acúmulo de déficit caso a IA demore entre pacotes na mesma resposta
+        this.txPacerStartTime = now - Math.max(0, this.txFramesSent - 1) * FRAME_MS;
+      }
+    }
+  }
+
   pushAudioChunk(chunk) {
-    if (this.stopped || !this.isPlaying) return;
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(chunk);
-      if (this.recorder) {
-        this.recorder.pushAiChunk(chunk);
+    if (this.stopped || !chunk || chunk.length === 0) return;
+    if (!this.isPlaying) {
+      this.startPlaybackStream();
+    }
+    this.streamEnding = false;
+
+    if (this.recorder) {
+      this.recorder.pushAiChunk(chunk);
+    }
+
+    const FRAME_BYTES = 640; // 40ms @ 8kHz 16-bit mono (320 samples)
+    const combined = this.txRemainder.length > 0 ? Buffer.concat([this.txRemainder, chunk]) : chunk;
+    let offset = 0;
+
+    while (offset + FRAME_BYTES <= combined.length) {
+      const frame = Buffer.from(combined.subarray(offset, offset + FRAME_BYTES));
+      this.txQueue.push(frame);
+      offset += FRAME_BYTES;
+    }
+
+    this.txRemainder = offset < combined.length
+      ? Buffer.from(combined.subarray(offset))
+      : Buffer.alloc(0);
+
+    if (!this.txPacerTimer && (this.txQueue.length > 0 || this.txRemainder.length >= 2)) {
+      this.txPacerStartTime = Date.now();
+      this.txFramesSent = 0;
+      this.drainTxPacerTick();
+      if (this.txQueue.length > 0 || !this.streamEnding) {
+        this.txPacerTimer = setInterval(() => this.drainTxPacerTick(), 20);
       }
-      this.playbackChunkCount++;
-      if (this.playbackChunkCount === 1) {
-        console.log(`[${this.callId}] 🔊 Primeiro chunk de áudio enviado via WS (${chunk.length} bytes)`);
-      }
+    } else if (this.txPacerTimer) {
+      this.drainTxPacerTick();
     }
   }
 
   endPlaybackStream() {
-    if (this.isPlaying) {
-      console.log(`[${this.callId}] 🔇 Playback encerrado (${this.playbackChunkCount} chunks enviados)`);
+    if (!this.isPlaying) return;
+    this.streamEnding = true;
+    if (this.txPacerTimer) {
+      this.drainTxPacerTick();
+    } else if (this.txRemainder.length >= 2 && this.socket && this.socket.readyState === WebSocket.OPEN) {
+      const evenLen = this.txRemainder.length & ~1;
+      try {
+        this.socket.send(this.txRemainder.subarray(0, evenLen));
+        this.playbackChunkCount++;
+      } catch {}
+      this.txRemainder = Buffer.alloc(0);
+      console.log(`[${this.callId}] 🔇 Playback encerrado (${this.playbackChunkCount} frames enviados)`);
+      this.isPlaying = false;
+      this.streamEnding = false;
+    } else {
+      console.log(`[${this.callId}] 🔇 Playback encerrado (${this.playbackChunkCount} frames enviados)`);
+      this.isPlaying = false;
+      this.streamEnding = false;
     }
-    this.isPlaying = false;
   }
 
   killAudio() {
     this.isPlaying = false;
+    this.streamEnding = false;
+    this.stopTxPacer(true);
     if (this.recorder) {
       this.recorder.clearAiBuffer();
     }
@@ -376,7 +495,9 @@ class WsMediaBridge {
     if (this.stopped) return;
     this.stopped = true;
 
-    this.endPlaybackStream();
+    this.stopTxPacer(true);
+    this.isPlaying = false;
+    this.streamEnding = false;
 
     if (this.recorder) {
       await this.recorder.stop();

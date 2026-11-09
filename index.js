@@ -39,6 +39,7 @@ const ExtensionManager = require('./utils/extension-manager');
 const { createApiRouter } = require('./utils/api-router');
 const aiProviderManager = require('./utils/ai-provider-manager');
 const ElevenLabsS2SBridge = require('./media/elevenlabs-s2s-bridge');
+const { sendVollPlanWebhook } = require('./utils/voll-webhook');
 
 function createAiBridge(tenant, sipHeaders) {
   const engine = (tenant?.stsEngine || 'openai').toLowerCase();
@@ -96,102 +97,13 @@ function getChannelUuid(endpoint) {
   );
 }
 
-// Helper de upsampling PCM16: 8kHz -> 24kHz com Interpolação Linear e Buffer.allocUnsafe (Zero-Fill Overhead)
-function upsample8to24(buffer8k) {
-  const samplesCount = buffer8k.length >> 1; // Math.floor(length / 2) via bitshift
-  if (samplesCount === 0) return Buffer.alloc(0);
-  const buffer24k = Buffer.allocUnsafe(samplesCount * 6);
-
-  for (let i = 0; i < samplesCount; i++) {
-    const s0 = buffer8k.readInt16LE(i * 2);
-    const s1 = i + 1 < samplesCount ? buffer8k.readInt16LE((i + 1) * 2) : s0;
-
-    const diff = s1 - s0;
-    const pos = i * 6;
-    buffer24k.writeInt16LE(s0, pos);
-    buffer24k.writeInt16LE((s0 + diff * 0.3333) | 0, pos + 2);
-    buffer24k.writeInt16LE((s0 + diff * 0.6667) | 0, pos + 4);
-  }
-  return buffer24k;
-}
-
-// Helper de downsampling PCM16: 24kHz -> 8kHz com filtro FIR Anti-Aliasing (elimina chiado/hiss de frequências agudas)
-function downsample24to8(buffer24k) {
-  const samplesCount = buffer24k.length >> 1;
-  const targetSamplesCount = (samplesCount / 3) | 0;
-  if (targetSamplesCount === 0) return Buffer.alloc(0);
-  const buffer8k = Buffer.allocUnsafe(targetSamplesCount * 2);
-
-  // Filtro FIR anti-aliasing simétrico de 7 taps (cutoff ~3.6kHz)
-  // Coeficientes: [-500, 1200, 6500, 18368, 6500, 1200, -500] (soma = 32768, ganho unitário DC exato)
-  // Rejeita frequências acima de 4kHz antes do subamostragem para evitar aliasing espectral (chiado)
-  const getSample = (idx) => {
-    if (idx < 0) idx = 0;
-    else if (idx >= samplesCount) idx = samplesCount - 1;
-    return buffer24k.readInt16LE(idx * 2);
-  };
-
-  for (let i = 0; i < targetSamplesCount; i++) {
-    const center = i * 3;
-    const s_m3 = getSample(center - 3);
-    const s_m2 = getSample(center - 2);
-    const s_m1 = getSample(center - 1);
-    const s_0  = getSample(center);
-    const s_p1 = getSample(center + 1);
-    const s_p2 = getSample(center + 2);
-    const s_p3 = getSample(center + 3);
-
-    const acc = -500 * (s_m3 + s_p3) + 1200 * (s_m2 + s_p2) + 6500 * (s_m1 + s_p1) + 18368 * s_0;
-    let out = (acc >> 15) | 0;
-    if (out > 32767) out = 32767;
-    else if (out < -32768) out = -32768;
-
-    buffer8k.writeInt16LE(out, i * 2);
-  }
-  return buffer8k;
-}
-
-// Tabelas rápidas de conversão Linear PCM16 <-> G.711 u-law (8kHz nativo, zero resampling)
-function linear16ToMulaw(pcm16Buffer) {
-  const samples = pcm16Buffer.length >> 1;
-  const mulaw = Buffer.allocUnsafe(samples);
-  const BIAS = 0x84;
-  const CLIP = 32635;
-
-  for (let i = 0; i < samples; i++) {
-    let sample = pcm16Buffer.readInt16LE(i * 2);
-    const sign = (sample >> 8) & 0x80;
-    if (sign !== 0) sample = -sample;
-    if (sample > CLIP) sample = CLIP;
-    sample += BIAS;
-
-    let exponent = 7;
-    for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {}
-    const mantissa = (sample >> (exponent + 3)) & 0x0f;
-    mulaw[i] = ~(sign | (exponent << 4) | mantissa) & 0xff;
-  }
-  return mulaw;
-}
-
-function mulawToLinear16(mulawBuffer) {
-  if (!mulawToLinear16.table) {
-    const table = new Int16Array(256);
-    for (let i = 0; i < 256; i++) {
-      const u = ~i;
-      let t = ((u & 0x0f) << 3) + 0x84;
-      t <<= (u & 0x70) >> 4;
-      table[i] = (u & 0x80) ? (0x84 - t) : (t - 0x84);
-    }
-    mulawToLinear16.table = table;
-  }
-  const table = mulawToLinear16.table;
-  const len = mulawBuffer.length;
-  const pcm16 = Buffer.allocUnsafe(len * 2);
-  for (let i = 0; i < len; i++) {
-    pcm16.writeInt16LE(table[mulawBuffer[i]], i * 2);
-  }
-  return pcm16;
-}
+const {
+  StatefulResampler24to8,
+  StatefulReconstructionFilter8k,
+  upsample8to24,
+  linear16ToMulaw,
+  mulawToLinear16
+} = require('./utils/audio-resampler');
 
 class OpenAIS2SBridge {
   constructor(tenant, sipHeaders = {}) {
@@ -199,12 +111,17 @@ class OpenAIS2SBridge {
     this.sipHeaders = sipHeaders;
     this.whisperSession = null;
     const provider = aiProviderManager.get('openai');
-    const codec = provider?.audioCodec || tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'g711_ulaw';
+    const codec = provider?.audioCodec || tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'pcm24k';
     this.useG711 = codec === 'g711_ulaw';
+    this.resampler24to8 = new StatefulResampler24to8();
+    this.reconFilter8k = new StatefulReconstructionFilter8k();
     this.endpoint = null;
     this.dialog = null;
     this.channelUuid = null;
     this.callId = null;
+    this.attemptId = null;
+    this.providerAttemptId = null;
+    this.callOutcome = null;
     this.energyManager = new EnergyManager();
     this.mediaBridge = new WsMediaBridge();
 
@@ -417,6 +334,8 @@ class OpenAIS2SBridge {
     this.isAgentTalking = false;
     this.agentPlaybackStartTime = null;
     this.isResponseCancelled = true;
+    this.resampler24to8.reset();
+    this.reconFilter8k.reset();
     this.mediaBridge.killAudio();
     if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
       try {
@@ -529,6 +448,50 @@ class OpenAIS2SBridge {
         }
       }
 
+      if (body.type === 'response.function_call_arguments.done') {
+        console.log(`[${this.callId}] 🛠️ [Tool Call] Função invocada: ${body.name} com args:`, body.arguments);
+        if (body.name === 'registrar_desfecho_chamada') {
+          try {
+            const parsed = JSON.parse(body.arguments || '{}');
+            this.callOutcome = {
+              tabulationCode: parsed.tabulationCode,
+              scheduledAt: parsed.scheduledAt,
+              summary: parsed.summary
+            };
+            console.log(`[${this.callId}] 🎯 [Desfecho Registrado pela IA]:`, this.callOutcome);
+          } catch (e) {
+            console.warn(`[${this.callId}] ⚠️ Erro ao fazer parse dos args de registrar_desfecho_chamada:`, e.message);
+          }
+        }
+        if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN && body.call_id) {
+          try {
+            this.openaiSocket.send(JSON.stringify({
+              type: 'conversation.item.create',
+              item: {
+                type: 'function_call_output',
+                call_id: body.call_id,
+                output: JSON.stringify({ ok: true, status: 'registrado' })
+              }
+            }));
+            this.openaiSocket.send(JSON.stringify({ type: 'response.create' }));
+          } catch {}
+        }
+      }
+
+      if (body.type === 'response.output_item.done' && body.item && body.item.type === 'function_call') {
+        if (body.item.name === 'registrar_desfecho_chamada') {
+          try {
+            const parsed = JSON.parse(body.item.arguments || '{}');
+            this.callOutcome = {
+              tabulationCode: parsed.tabulationCode,
+              scheduledAt: parsed.scheduledAt,
+              summary: parsed.summary
+            };
+            console.log(`[${this.callId}] 🎯 [Desfecho Registrado via output_item.done]:`, this.callOutcome);
+          } catch {}
+        }
+      }
+
       if (body.type === 'response.created' || body.type === 'response.output_item.added') {
         this.isResponseCancelled = false;
         if (this.greetingResponsePending && body.type === 'response.created') {
@@ -553,6 +516,8 @@ class OpenAIS2SBridge {
         this.isResponseCancelled = false;
         this.isAgentTalking = false;
         this.agentPlaybackStartTime = null;
+        this.resampler24to8.reset();
+        this.reconFilter8k.reset();
         this.mediaBridge.killAudio();
       }
 
@@ -567,8 +532,8 @@ class OpenAIS2SBridge {
         }
         const rawDelta = Buffer.from(body.delta, 'base64');
         const pcm8k = this.activeAudioFormat === 'g711_ulaw'
-          ? mulawToLinear16(rawDelta)
-          : downsample24to8(rawDelta);
+          ? this.reconFilter8k.process(mulawToLinear16(rawDelta))
+          : this.resampler24to8.process(rawDelta);
         this.mediaBridge.pushAudioChunk(pcm8k);
 
         if (this.isGreetingInProgress) {
@@ -639,6 +604,8 @@ class OpenAIS2SBridge {
       if (['response.output_audio.done', 'response.done'].includes(body.type)) {
         if (this.isAgentTalking) {
           this.isAgentTalking = false;
+          this.resampler24to8.reset();
+          this.reconFilter8k.reset();
           console.log(`[${this.callId}] 🔊 Fim da transmissão de áudio da IA.`);
           this.mediaBridge.endPlaybackStream();
         }
@@ -1232,6 +1199,35 @@ class OpenAIS2SBridge {
       sessionUpdate.session.prompt = { id: this.tenant.openaiPromptId };
     }
 
+    sessionUpdate.session.tools = [
+      {
+        type: 'function',
+        name: 'registrar_desfecho_chamada',
+        description:
+          'Registra a tabulação e o desfecho final da ligação com o cliente, especialmente se houver acordo ou pedido de reagendamento para outro dia/horário.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tabulationCode: {
+              type: 'string',
+              enum: ['CONVERSION', 'CPC_NO_DEAL', 'CALLBACK_SCHEDULED', 'WRONG_PERSON', 'OPT_OUT'],
+              description: 'Código da tabulação: CONVERSION (acordo), CPC_NO_DEAL (sem acordo), CALLBACK_SCHEDULED (reagendamento), WRONG_PERSON (terceiro), OPT_OUT (remover contato)'
+            },
+            scheduledAt: {
+              type: 'string',
+              description: 'Data e hora combinada no formato ISO-8601 (ex: 2026-11-10T14:30:00-03:00) quando o cliente pedir reagendamento (CALLBACK_SCHEDULED)'
+            },
+            summary: {
+              type: 'string',
+              description: 'Resumo objetivo do que foi conversado ou combinado'
+            }
+          },
+          required: ['tabulationCode']
+        }
+      }
+    ];
+    sessionUpdate.session.tool_choice = 'auto';
+
     this.openaiSocket.send(JSON.stringify(sessionUpdate));
 
     const responseCreate = {
@@ -1712,9 +1708,38 @@ async function originateOutboundCall(params) {
 
   const tenantId = params.tenantId || 'default';
   const baseTenant = tenantManager.tenants.get(tenantId) || tenantManager.getDefaultTenant();
+
+  let extraInstructions = params.instructions || '';
+  if (params.contact) {
+    const contactName = params.contact.name || 'Cliente';
+    const vars = params.contact.variables || {};
+    const varLines = Object.entries(vars).map(([k, v]) => `- ${k}: ${v}`).join('\n');
+    const nowBrt = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+    const contactPrompt = `
+[DADOS DO CLIENTE E CONTEXTO OPERACIONAL]
+- Nome do cliente: ${contactName}
+- Data e hora atual (São Paulo): ${nowBrt}
+${varLines ? `- Dados complementares:\n${varLines}` : ''}
+[INSTRUÇÃO OBRIGATÓRIA DE DESFECHO]
+Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfecho da conversa.
+- Se o cliente concordar com o pagamento/acordo: tabulationCode="CONVERSION".
+- Se o cliente disser que não pode falar agora e pedir para ligar em outro horário/dia: descubra a data/hora exata preferida, calcule o timestamp ISO com fuso -03:00 correspondente à data atual informada acima e registre tabulationCode="CALLBACK_SCHEDULED" e scheduledAt="<ISO>".
+- Se disser que não tem interesse ou recusar: tabulationCode="CPC_NO_DEAL".
+- Se não for o titular da conta / engano / terceiro: tabulationCode="WRONG_PERSON".
+- Se solicitar expressamente para nunca mais ligar: tabulationCode="OPT_OUT".
+`.trim();
+
+    extraInstructions = extraInstructions
+      ? `${contactPrompt}\n\n[INSTRUÇÕES ESPECÍFICAS DA CAMPANHA]\n${extraInstructions}`
+      : contactPrompt;
+  }
+
   const tenant = {
     ...baseTenant,
-    ...(params.instructions ? { instructions: params.instructions } : {}),
+    instructions: extraInstructions
+      ? `${baseTenant.instructions ? baseTenant.instructions + '\n\n' : ''}${extraInstructions}`
+      : baseTenant.instructions,
     ...(params.voice ? { voice: params.voice } : {}),
     ...(params.openaiModel ? { openaiModel: params.openaiModel } : {})
   };
@@ -1736,8 +1761,11 @@ async function originateOutboundCall(params) {
   };
 
   try {
-    const from = (params.from && params.from.trim()) ? params.from.trim() : '5511989785888';
-    const to = params.to ? String(params.to).trim() : '';
+    const from = (params.from && params.from.trim()) ? params.from.trim() : (params.callerId || '5511989785888');
+    let to = params.to ? String(params.to).trim() : '';
+    if (to.startsWith('+')) {
+      to = to.substring(1);
+    }
 
     if (to === '9000' || to === '*1000' || to.toLowerCase() === 'ia') {
       throw new Error('O ramal 9000 é exclusivo para chamadas de entrada (quando você liga DE um softphone PARA a IA). Para efetuar uma chamada de teste de saída, informe seu número de celular com DDD (ex: 11999998888 ou 5511999998888) ou um ramal SIP registrado (ex: 1000).');
@@ -1779,6 +1807,8 @@ async function originateOutboundCall(params) {
     );
 
     bridge = createAiBridge(tenant, sipHeaders);
+    bridge.attemptId = params.attemptId || null;
+    bridge.providerAttemptId = params.providerAttemptId || callId;
     activeBridges.set(callId, bridge);
     try {
       if (callHistoryManager) {
@@ -1853,6 +1883,44 @@ async function originateOutboundCall(params) {
             costUsd: aiUsage ? aiUsage.costUsd : undefined,
             totalTokens: aiUsage ? aiUsage.totalTokens : undefined
           });
+
+          // Notifica o Voll Plan via Webhook autenticado por HMAC
+          let tabulationCode = 'NO_ANSWER';
+          let scheduledAt = undefined;
+          let summary = undefined;
+
+          if (bridge.callOutcome && bridge.callOutcome.tabulationCode) {
+            tabulationCode = bridge.callOutcome.tabulationCode;
+            scheduledAt = bridge.callOutcome.scheduledAt || undefined;
+            summary = bridge.callOutcome.summary || undefined;
+          } else if (reason.startsWith('amd_caixa_postal') || reason.startsWith('amd_operadora')) {
+            tabulationCode = 'VOICEMAIL';
+            summary = 'Caixa postal detectada pelo AMD Whisper';
+          } else if (reason === 'amd_silencio') {
+            tabulationCode = 'NO_ANSWER';
+            summary = 'Silêncio na linha';
+          } else if (callInfo && (callInfo.durationSec > 5 || callInfo.isCpc)) {
+            tabulationCode = 'CPC_NO_DEAL';
+            summary = 'Atendimento confirmado sem fechamento';
+          } else {
+            tabulationCode = 'NO_ANSWER';
+            summary = `Chamada finalizada (${reason})`;
+          }
+
+          if (params.callback && params.callback.url) {
+            sendVollPlanWebhook(params.callback, {
+              eventId: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              attemptId: params.attemptId,
+              providerAttemptId: params.providerAttemptId || callId,
+              type: 'RESULT',
+              occurredAt: new Date().toISOString(),
+              tabulationCode,
+              scheduledAt,
+              summary,
+              durationSeconds: Math.round(callInfo ? callInfo.durationSec : 0),
+              cost: aiUsage ? aiUsage.costUsd : undefined
+            }).catch((whErr) => console.warn(`[${callId}] Falha ao despachar webhook para Voll Plan:`, whErr.message));
+          }
         }
       } catch (logErr) {
         console.warn(`[${callId}] Falha ao arquivar log da chamada:`, logErr.message);
@@ -1924,6 +1992,27 @@ async function originateOutboundCall(params) {
       }
     } catch (logErr) {
       console.warn('Falha ao registrar tentativa com erro no histórico:', logErr.message);
+    }
+    if (params.callback && params.callback.url) {
+      let tabCode = 'NO_ANSWER';
+      const msg = String(err.message || '').toLowerCase();
+      if (msg.includes('486') || msg.includes('busy') || msg.includes('ocupado')) {
+        tabCode = 'BUSY';
+      } else if (msg.includes('404') || msg.includes('484') || msg.includes('invalid') || msg.includes('inválido')) {
+        tabCode = 'INVALID_NUMBER';
+      } else if (msg.includes('480') || msg.includes('timeout') || msg.includes('temporarily')) {
+        tabCode = 'NO_ANSWER';
+      }
+      sendVollPlanWebhook(params.callback, {
+        eventId: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        attemptId: params.attemptId,
+        providerAttemptId: params.providerAttemptId || (dialog && dialog.sip?.callId) || `fail-${Date.now()}`,
+        type: 'RESULT',
+        occurredAt: new Date().toISOString(),
+        tabulationCode: tabCode,
+        durationSeconds: 0,
+        summary: `Falha na originação SIP: ${err.message || 'originate_failed'}`
+      }).catch((whErr) => console.warn('Falha ao despachar webhook de erro para Voll Plan:', whErr.message));
     }
     throw err;
   }
@@ -2085,6 +2174,8 @@ srf.invite(async (req, res) => {
     );
 
     bridge = createAiBridge(tenant, sipHeaders);
+    bridge.attemptId = params.attemptId || null;
+    bridge.providerAttemptId = params.providerAttemptId || callId;
     activeBridges.set(callId, bridge);
     try {
       if (callHistoryManager) {

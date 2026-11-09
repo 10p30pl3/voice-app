@@ -8,110 +8,14 @@ const CrosstalkFilter = require('../utils/crosstalk-filter');
 const FrameVad = require('../utils/frame-vad');
 const aiProviderManager = require('../utils/ai-provider-manager');
 const aiCostTracker = require('../utils/ai-cost-tracker');
-
-function upsample8to16(buffer8k) {
-  if (!buffer8k || buffer8k.length < 2) return Buffer.alloc(0);
-  const samplesCount = buffer8k.length >> 1;
-  const buffer16k = Buffer.allocUnsafe(samplesCount * 4);
-
-  for (let i = 0; i < samplesCount; i++) {
-    const s0 = buffer8k.readInt16LE(i * 2);
-    const s1 = i + 1 < samplesCount ? buffer8k.readInt16LE((i + 1) * 2) : s0;
-    const mid = (s0 + s1) >> 1;
-    const pos = i * 4;
-    buffer16k.writeInt16LE(s0, pos);
-    buffer16k.writeInt16LE(mid, pos + 2);
-  }
-  return buffer16k;
-}
-
-function downsample16to8(buffer16k) {
-  if (!buffer16k || buffer16k.length < 4) return Buffer.alloc(0);
-  const samplesCount = buffer16k.length >> 1;
-  const targetSamplesCount = samplesCount >> 1;
-  const buffer8k = Buffer.allocUnsafe(targetSamplesCount * 2);
-
-  for (let i = 0; i < targetSamplesCount; i++) {
-    const s0 = buffer16k.readInt16LE(i * 4);
-    const s1 = buffer16k.readInt16LE(i * 4 + 2);
-    const avg = (s0 + s1) >> 1;
-    buffer8k.writeInt16LE(avg, i * 2);
-  }
-  return buffer8k;
-}
-
-function downsample24to8(buffer24k) {
-  const samplesCount = buffer24k.length >> 1;
-  const targetSamplesCount = (samplesCount / 3) | 0;
-  if (targetSamplesCount === 0) return Buffer.alloc(0);
-  const buffer8k = Buffer.allocUnsafe(targetSamplesCount * 2);
-
-  const getSample = (idx) => {
-    if (idx < 0) idx = 0;
-    else if (idx >= samplesCount) idx = samplesCount - 1;
-    return buffer24k.readInt16LE(idx * 2);
-  };
-
-  for (let i = 0; i < targetSamplesCount; i++) {
-    const center = i * 3;
-    const s_m3 = getSample(center - 3);
-    const s_m2 = getSample(center - 2);
-    const s_m1 = getSample(center - 1);
-    const s_0 = getSample(center);
-    const s_p1 = getSample(center + 1);
-    const s_p2 = getSample(center + 2);
-    const s_p3 = getSample(center + 3);
-
-    const acc = -500 * (s_m3 + s_p3) + 1200 * (s_m2 + s_p2) + 6500 * (s_m1 + s_p1) + 18368 * s_0;
-    let out = (acc >> 15) | 0;
-    if (out > 32767) out = 32767;
-    else if (out < -32768) out = -32768;
-
-    buffer8k.writeInt16LE(out, i * 2);
-  }
-  return buffer8k;
-}
-
-function linear16ToMulaw(pcm16Buffer) {
-  const samples = pcm16Buffer.length >> 1;
-  const mulaw = Buffer.allocUnsafe(samples);
-  const BIAS = 0x84;
-  const CLIP = 32635;
-
-  for (let i = 0; i < samples; i++) {
-    let sample = pcm16Buffer.readInt16LE(i * 2);
-    const sign = (sample >> 8) & 0x80;
-    if (sign !== 0) sample = -sample;
-    if (sample > CLIP) sample = CLIP;
-    sample += BIAS;
-
-    let exponent = 7;
-    for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {}
-    const mantissa = (sample >> (exponent + 3)) & 0x0f;
-    mulaw[i] = ~(sign | (exponent << 4) | mantissa) & 0xff;
-  }
-  return mulaw;
-}
-
-function mulawToLinear16(mulawBuffer) {
-  if (!mulawToLinear16.table) {
-    const table = new Int16Array(256);
-    for (let i = 0; i < 256; i++) {
-      const u = ~i;
-      let t = ((u & 0x0f) << 3) + 0x84;
-      t <<= (u & 0x70) >> 4;
-      table[i] = (u & 0x80) ? (0x84 - t) : (t - 0x84);
-    }
-    mulawToLinear16.table = table;
-  }
-  const table = mulawToLinear16.table;
-  const len = mulawBuffer.length;
-  const pcm16 = Buffer.allocUnsafe(len * 2);
-  for (let i = 0; i < len; i++) {
-    pcm16.writeInt16LE(table[mulawBuffer[i]], i * 2);
-  }
-  return pcm16;
-}
+const {
+  StatefulResampler24to8,
+  StatefulResampler16to8,
+  StatefulReconstructionFilter8k,
+  upsample8to16,
+  linear16ToMulaw,
+  mulawToLinear16
+} = require('../utils/audio-resampler');
 
 function wait(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -274,6 +178,13 @@ class ElevenLabsS2SBridge extends EventEmitter {
     this.userInputAudioFormat = 'pcm_8000';
     this.conversationId = null;
     this.agentSilenceTimer = null;
+    this.turnAudioBytes = 0;
+    this.turnPlaybackStartTime = null;
+
+    // Filtros FIR Sinc Stateful (31-tap Blackman) e Suavizador Pós-Reconstrução 8kHz
+    this.resampler24to8 = new StatefulResampler24to8();
+    this.resampler16to8 = new StatefulResampler16to8();
+    this.reconFilter8k = new StatefulReconstructionFilter8k();
 
     this.handleEslEvent = this.handleEslEvent.bind(this);
     this.handleDtmf = this.handleDtmf.bind(this);
@@ -442,16 +353,16 @@ class ElevenLabsS2SBridge extends EventEmitter {
     if (!rawAudioBuf || rawAudioBuf.length === 0) return Buffer.alloc(0);
     const fmt = (this.agentAudioFormat || 'pcm_8000').toLowerCase();
     if (fmt === 'pcm_8000') {
-      return rawAudioBuf;
+      return this.reconFilter8k.process(rawAudioBuf);
     }
     if (fmt === 'ulaw_8000' || fmt === 'g711_ulaw') {
-      return mulawToLinear16(rawAudioBuf);
+      return this.reconFilter8k.process(mulawToLinear16(rawAudioBuf));
     }
     if (fmt === 'pcm_24000') {
-      return downsample24to8(rawAudioBuf);
+      return this.resampler24to8.process(rawAudioBuf);
     }
-    // Default fallback: pcm_16000 -> pcm_8000
-    return downsample16to8(rawAudioBuf);
+    // Default fallback: pcm_16000 -> pcm_8000 com filtro FIR anti-aliasing stateful
+    return this.resampler16to8.process(rawAudioBuf);
   }
 
   convertUserPcm8kToElevenFormat(pcm8kBuffer) {
@@ -489,6 +400,8 @@ class ElevenLabsS2SBridge extends EventEmitter {
         if (!this.isAgentTalking) {
           this.isAgentTalking = true;
           this.agentPlaybackStartTime = Date.now();
+          this.turnPlaybackStartTime = Date.now();
+          this.turnAudioBytes = 0;
           this.mediaBridge.startPlaybackStream();
         }
 
@@ -498,6 +411,10 @@ class ElevenLabsS2SBridge extends EventEmitter {
         if (this.mediaBridge && !this.isTerminated && pcm8k.length > 0) {
           // Nota: WsMediaBridge.pushAudioChunk já alimenta automaticamente this.recorder.pushAiChunk(pcm8k)
           this.mediaBridge.pushAudioChunk(pcm8k);
+        }
+
+        if (pcm8k.length > 0) {
+          this.turnAudioBytes += pcm8k.length;
         }
 
         if (this.isGreetingInProgress && pcm8k.length > 0) {
@@ -510,23 +427,36 @@ class ElevenLabsS2SBridge extends EventEmitter {
         if (this.agentSilenceTimer) {
           clearTimeout(this.agentSilenceTimer);
         }
+
+        // Calcula o tempo real restante de reprodução no pacer (PCM 8kHz 16-bit = 16 bytes/ms)
+        const turnDurationMs = Math.round(this.turnAudioBytes / 16);
+        const elapsedTurnMs = this.turnPlaybackStartTime
+          ? Date.now() - this.turnPlaybackStartTime
+          : 0;
+        const remainingTurnPlayoutMs = Math.max(650, turnDurationMs - elapsedTurnMs + 300);
+
         this.agentSilenceTimer = setTimeout(() => {
           if (this.isAgentTalking) {
             this.isAgentTalking = false;
-            console.log(`[${this.callId}] 🔊 Fim da transmissão de áudio da IA (ElevenLabs).`);
+            this.turnAudioBytes = 0;
+            this.turnPlaybackStartTime = null;
+            this.resampler24to8.reset();
+            this.resampler16to8.reset();
+            this.reconFilter8k.reset();
+            console.log(`[${this.callId}] 🔊 Fim da reprodução de áudio da IA (ElevenLabs).`);
             if (this.mediaBridge) {
               this.mediaBridge.endPlaybackStream();
             }
           }
 
-          // Barge-in Dinâmico: Quando a IA termina de transmitir os chunks da saudação inicial,
-          // aguarda o playout completo do buffer no FreeSWITCH antes de abrir o microfone do cliente.
+          // Barge-in Dinâmico: Quando a IA termina de reproduzir os chunks da saudação inicial,
+          // abre o microfone do cliente no FreeSWITCH.
           if (this.isGreetingInProgress && !this.greetingFinishTimer) {
             const audioDurationMs = Math.round(this.greetingAudioBytes / 16);
             const elapsedPlaybackMs = this.greetingPlaybackStartTime
               ? Date.now() - this.greetingPlaybackStartTime
               : 0;
-            const remainingMs = Math.max(0, audioDurationMs - elapsedPlaybackMs) + 350;
+            const remainingMs = Math.max(0, audioDurationMs - elapsedPlaybackMs) + 250;
 
             console.log(
               `[${this.callId}] ⏳ [BARGE-IN DINÂMICO] Saudação da ElevenLabs transmitida (${(audioDurationMs / 1000).toFixed(1)}s de áudio). Aguardando término da reprodução (${remainingMs}ms) para abrir o canal.`
@@ -545,7 +475,7 @@ class ElevenLabsS2SBridge extends EventEmitter {
               this.terminateCall('safety_limit_3_minutes');
             }, 1500);
           }
-        }, 700);
+        }, remainingTurnPlayoutMs);
       }
 
       // 2. Transcrição da fala do Cliente recebida da ElevenLabs
@@ -602,6 +532,11 @@ class ElevenLabsS2SBridge extends EventEmitter {
   interruptAgent() {
     this.isAgentTalking = false;
     this.agentPlaybackStartTime = null;
+    this.turnAudioBytes = 0;
+    this.turnPlaybackStartTime = null;
+    this.resampler24to8.reset();
+    this.resampler16to8.reset();
+    this.reconFilter8k.reset();
     if (this.agentSilenceTimer) {
       clearTimeout(this.agentSilenceTimer);
       this.agentSilenceTimer = null;

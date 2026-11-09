@@ -32,7 +32,7 @@ const DEFAULT_AI_PROVIDERS = [
       'cedar'
     ],
     apiKey: '',
-    audioCodec: 'g711_ulaw',
+    audioCodec: 'pcm24k',
     pricingDescription: 'Audio In: $10/M | Audio Out: $20/M | Text In: $0.60/M | Text Out: $2.40/M'
   },
   {
@@ -60,7 +60,7 @@ const DEFAULT_AI_PROVIDERS = [
       'Custom'
     ],
     apiKey: '',
-    audioCodec: 'g711_ulaw',
+    audioCodec: 'pcm24k',
     pricingDescription: 'Voz Duplex em Tempo Real: ~$0.08 / min'
   }
 ];
@@ -102,7 +102,7 @@ class AiProviderManager {
           p.apiKey = process.env.ELEVENLABS_API_KEY;
         }
         if (!p.audioCodec) {
-          p.audioCodec = process.env.AUDIO_CODEC_MODE || 'g711_ulaw';
+          p.audioCodec = process.env.AUDIO_CODEC_MODE || 'pcm24k';
         }
         this.providers.set(p.id, p);
       }
