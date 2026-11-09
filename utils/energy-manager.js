@@ -97,8 +97,14 @@ class EnergyManager {
           this.magnitudeSum += maxMag;
           this.magnitudeCount++;
         }
-      } else if (rms < 10000) { 
-        this.noiseFloor = (this.alpha * rms) + ((1 - this.alpha) * this.noiseFloor);
+      } else {
+        // [v48.0] Estimação robusta do piso de ruído de fundo:
+        // Ignora voz humana ativa (RMS > 400) para evitar que o "Alô!" do cliente inflacione o noiseFloor para >1500
+        if (rms < 400) {
+          // Desce rápido para acompanhar períodos de silêncio, sobe suavemente para não inflar com estalos transitórios
+          const adaptAlpha = rms < this.noiseFloor ? 0.25 : 0.04;
+          this.noiseFloor = (adaptAlpha * rms) + ((1 - adaptAlpha) * this.noiseFloor);
+        }
       }
       
       return rms;
@@ -186,11 +192,12 @@ class EnergyManager {
 
   /**
    * Sugere um threshold de VAD para a OpenAI (0.0 a 1.0)
+   * Teto máximo seguro limitado a 0.68 para nunca ensurdecer a IA no telefone.
    * @returns {number}
    */
   suggestThreshold(baseThreshold = 0.5) {
-    const maxThreshold = 0.98;
-    const mapped = baseThreshold + (this.noiseFloor / 1000) * 0.4;
+    const maxThreshold = 0.68;
+    const mapped = baseThreshold + (this.noiseFloor / 1000) * 0.20;
     return Math.min(maxThreshold, mapped);
   }
 
@@ -200,9 +207,9 @@ class EnergyManager {
    */
   getClassification() {
     const nf = this.noiseFloor;
-    if (nf < 50) return 'SILENCE';
-    if (nf < 200) return 'OFFICE';
-    if (nf < 600) return 'STREET';
+    if (nf < 80) return 'SILENCE';
+    if (nf < 220) return 'OFFICE';
+    if (nf < 380) return 'STREET';
     return 'TV';
   }
 }

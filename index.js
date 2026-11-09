@@ -111,7 +111,7 @@ class OpenAIS2SBridge {
     this.sipHeaders = sipHeaders;
     this.whisperSession = null;
     const provider = aiProviderManager.get('openai');
-    const codec = provider?.audioCodec || tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'pcm24k';
+    const codec = provider?.audioCodec || tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'g711_ulaw';
     this.useG711 = codec === 'g711_ulaw';
     this.resampler24to8 = new StatefulResampler24to8();
     this.reconFilter8k = new StatefulReconstructionFilter8k();
@@ -133,24 +133,52 @@ class OpenAIS2SBridge {
     this.calibrationActive = true;
     this.calibrationSamplesRecv = 0;
 
-    this.profiles = {
-      SILENCE: {
-        fone: { base: 0.45, prefix: 300, silence: 750 },
-        viva: { base: 0.50, prefix: 350, silence: 800 }
+    // Perfis acústicos calibrados por tipo de linha:
+    // - trunk_sip (Linha Telefônica PSTN / Tronco SIP / Celular):
+    //   G.711 / AMR com corte de banda e ruído de operadora. Exige latência ultra-baixa de fim de turno (400-500ms)
+    //   e VAD adaptativo calibrado (0.45 a 0.65 máx) para resposta imediata.
+    // - softphone (Softphone IP / MicroSIP / Linphone em PC/Headset):
+    //   Microfone de alta fidelidade e sala de escritório.
+    this.profilesByLine = {
+      trunk_sip: {
+        SILENCE: {
+          fone: { base: 0.45, prefix: 200, silence: 400 },
+          viva: { base: 0.48, prefix: 220, silence: 440 }
+        },
+        OFFICE: {
+          fone: { base: 0.50, prefix: 220, silence: 450 },
+          viva: { base: 0.52, prefix: 250, silence: 480 }
+        },
+        STREET: {
+          fone: { base: 0.55, prefix: 250, silence: 500 },
+          viva: { base: 0.58, prefix: 280, silence: 540 }
+        },
+        TV: {
+          fone: { base: 0.62, prefix: 280, silence: 550 },
+          viva: { base: 0.65, prefix: 300, silence: 600 }
+        }
       },
-      OFFICE: {
-        fone: { base: 0.55, prefix: 400, silence: 800 },
-        viva: { base: 0.55, prefix: 500, silence: 850 }
-      },
-      STREET: {
-        fone: { base: 0.75, prefix: 500, silence: 900 },
-        viva: { base: 0.75, prefix: 600, silence: 950 }
-      },
-      TV: {
-        fone: { base: 0.95, prefix: 1000, silence: 1200 },
-        viva: { base: 0.95, prefix: 1200, silence: 1500 }
+      softphone: {
+        SILENCE: {
+          fone: { base: 0.45, prefix: 250, silence: 450 },
+          viva: { base: 0.48, prefix: 280, silence: 480 }
+        },
+        OFFICE: {
+          fone: { base: 0.50, prefix: 280, silence: 480 },
+          viva: { base: 0.55, prefix: 300, silence: 520 }
+        },
+        STREET: {
+          fone: { base: 0.58, prefix: 320, silence: 550 },
+          viva: { base: 0.62, prefix: 350, silence: 600 }
+        },
+        TV: {
+          fone: { base: 0.68, prefix: 350, silence: 620 },
+          viva: { base: 0.72, prefix: 400, silence: 680 }
+        }
       }
     };
+    this.lineType = 'trunk_sip';
+    this.profiles = this.profilesByLine.trunk_sip;
     this.currentProfile = 'SILENCE';
 
     this.openaiSocket = null;
@@ -735,6 +763,28 @@ class OpenAIS2SBridge {
     }
   }
 
+  detectLineType() {
+    const cleanTo = String(this.called || '').replace(/\D/g, '');
+    const cleanFrom = String(this.caller || '').replace(/\D/g, '');
+
+    const headerLineType = String(this.sipHeaders?.['x-line-type'] || '').toLowerCase();
+    if (headerLineType === 'softphone' || headerLineType === 'trunk_sip') {
+      return headerLineType;
+    }
+
+    // Se qualquer ponta for número de telefone público (>= 10 dígitos com DDD/DDI), é Tronco SIP
+    if (cleanTo.length >= 10 || cleanFrom.length >= 10) {
+      return 'trunk_sip';
+    }
+
+    // Se ambos forem ramais curtos (<= 5 dígitos, ex: 1000, 9000, *99, etc.), é Softphone interno de teste
+    if ((cleanTo.length >= 2 && cleanTo.length <= 5) || (cleanFrom.length >= 2 && cleanFrom.length <= 5)) {
+      return 'softphone';
+    }
+
+    return 'trunk_sip';
+  }
+
   async start({ callId, endpoint, dialog, caller = null, called = null }) {
     this.callId = callId;
     this.endpoint = endpoint;
@@ -747,6 +797,12 @@ class OpenAIS2SBridge {
     if (!this.channelUuid) {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
+
+    this.lineType = this.detectLineType();
+    this.profiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
+    console.log(
+      `[${this.callId}] 📞 Linha Detectada: [${this.lineType === 'trunk_sip' ? 'TRONCO SIP / TELEFONIA PÚBLICA' : 'SOFTPHONE INTERNO / TESTE'}] (De: ${this.caller || '--'} | Para: ${this.called || '--'})`
+    );
 
     // Log explícito do Filtro de Voz ativo na chamada
     const filterLabels = {
@@ -1073,12 +1129,13 @@ class OpenAIS2SBridge {
       this.calibrationActive = false;
       this.deviceMode = 'fone_ouvido';
       this.currentProfile = this.energyManager.getClassification();
-      const config = this.profiles[this.currentProfile].fone;
+      const lineProfiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
+      const config = lineProfiles[this.currentProfile].fone;
       vadThreshold = Number(this.tenant?.vadThreshold || config.base);
       prefixPaddingMs = Number(this.tenant?.prefixPaddingMs || config.prefix);
-      silenceDurationMs = Number(this.tenant?.silenceDurationMs || Math.max(750, config.silence));
+      silenceDurationMs = Number(this.tenant?.silenceDurationMs || config.silence);
       console.log(
-        `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms (Sonar pulado para 0ms de atraso)`
+        `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Linha ${this.lineType.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms (Sonar pulado para 0ms de atraso)`
       );
 
       // Chaveamento Dinâmico para ECAPA em ambiente ruidoso
@@ -1087,7 +1144,7 @@ class OpenAIS2SBridge {
       }
     } else if (bargeinLevel >= 3) {
       this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation false`);
-      await wait(400);
+      await wait(150);
       if (this.isTerminated || !this.endpoint) return;
 
       this.isToneProbe = true;
@@ -1119,14 +1176,15 @@ class OpenAIS2SBridge {
       }
 
       this.currentProfile = this.energyManager.getClassification();
-      const config = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
+      const lineProfiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
+      const config = lineProfiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
 
       vadThreshold = Number(this.tenant?.vadThreshold || config.base);
       prefixPaddingMs = Number(this.tenant?.prefixPaddingMs || config.prefix);
-      silenceDurationMs = Number(this.tenant?.silenceDurationMs || Math.max(750, config.silence));
+      silenceDurationMs = Number(this.tenant?.silenceDurationMs || config.silence);
 
       console.log(
-        `[${this.callId}] 🎯 SONAR LOCK: Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms`
+        `[${this.callId}] 🎯 SONAR LOCK: Linha ${this.lineType.toUpperCase()} | Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms`
       );
 
       // Chaveamento Dinâmico para ECAPA em ambiente ruidoso
@@ -1314,6 +1372,7 @@ class OpenAIS2SBridge {
         isSecondaryVoiceBlocked: this.isSecondaryVoiceBlocked,
         dspMetrics: this.crosstalkFilter ? this.crosstalkFilter.getMetrics() : null
       },
+      lineType: this.lineType || 'trunk_sip',
       codec: this.useG711 ? 'g711_ulaw' : 'pcm24k',
       deviceMode: this.deviceMode,
       noiseProfile: this.currentProfile,
@@ -1766,7 +1825,7 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
   };
 
   try {
-    const from = (params.from && params.from.trim()) ? params.from.trim() : (params.callerId || '5511989785888');
+    let from = (params.from && params.from.trim()) ? params.from.trim() : (params.callerId || '5511989785888');
     let to = params.to ? String(params.to).trim() : '';
     if (to.startsWith('+')) {
       to = to.substring(1);
@@ -1776,7 +1835,21 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
       throw new Error('O ramal 9000 é exclusivo para chamadas de entrada (quando você liga DE um softphone PARA a IA). Para efetuar uma chamada de teste de saída, informe seu número de celular com DDD (ex: 11999998888 ou 5511999998888) ou um ramal SIP registrado (ex: 1000).');
     }
 
-    const customHeaders = params.headers || {};
+    const cleanTo = to.replace(/\D/g, '');
+    const cleanFrom = from.replace(/\D/g, '');
+
+    // Normalização de BINA: se o destino for telefone público (>= 10 dígitos) e o From for ramal interno (< 10 dígitos),
+    // usa a BINA homologada na operadora (5511989785888) para evitar rejeição "603 Decline"
+    if (cleanTo.length >= 10 && cleanFrom.length < 10) {
+      from = params.callerId || '5511989785888';
+      console.log(`[Originate] 🛡️ BINA normalizada para operadora: From=${from} (era ${cleanFrom}) para destino público To=${to}`);
+    }
+
+    const detectedLine = cleanTo.length >= 10 ? 'trunk_sip' : 'softphone';
+    const customHeaders = {
+      'X-Line-Type': detectedLine,
+      ...(params.headers || {})
+    };
 
     const { endpoint: fsEndpoint, dialog: uacDialog, fsNode, releaseNodeSlot: rSlot } = await fsPool.originateCall(srf, {
       to,
@@ -1804,6 +1877,7 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
         params.crosstalkMode !== undefined
           ? String(params.crosstalkMode)
           : customHeaders['X-Crosstalk-Mode'] || String(tenant.crosstalkFilter?.mode || 'atual'),
+      'x-line-type': detectedLine,
       'x-tenant-id': tenant.id
     };
 

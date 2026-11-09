@@ -178,8 +178,27 @@ class OutboundRouteManager {
 
   // ---- Geração de XML do Dialplan do FreeSWITCH ----
 
+  getAiExtensionsRegex() {
+    const exts = new Set(['9\\d{3}', '\\*1000', 'ia']);
+    try {
+      const tFile = path.join(__dirname, '..', 'config', 'tenants.json');
+      if (fs.existsSync(tFile)) {
+        const arr = JSON.parse(fs.readFileSync(tFile, 'utf8'));
+        if (Array.isArray(arr)) {
+          for (const t of arr) {
+            if (t.extension && /^\d+$/.test(String(t.extension).trim())) {
+              exts.add(String(t.extension).trim());
+            }
+          }
+        }
+      }
+    } catch {}
+    return `^(${Array.from(exts).join('|')})$`;
+  }
+
   buildDialplanXml() {
     const activeRoutes = this.list().filter((r) => r.active);
+    const aiPattern = this.getAiExtensionsRegex();
 
     const renderRoutesXml = () => {
       if (activeRoutes.length === 0) {
@@ -196,10 +215,10 @@ class OutboundRouteManager {
           return `    <!-- Rota de Saída: ${escXml(r.name)} -->
     <extension name="${escXml(r.id)}">
       <condition field="destination_number" expression="${escXml(matchPattern)}">
-        <!-- Preserva caller_id_number do canal se definido pelo discador/sistema; senao usa o padrao da rota -->
-        <action application="set" data="effective_caller_id_number=\${cond(\${caller_id_number} == '' ? '${escXml(cidNum)}' : \${caller_id_number})}"/>
+        <!-- Normalizacao de BINA: se o caller_id for ramal interno (< 10 digitos) ou vazio, usa o DID homologado da rota para evitar 603 Decline da operadora -->
+        <action application="set" data="effective_caller_id_number=\${cond(\${regex(\${caller_id_number}|^[0-9]{10,13}$)} == true ? \${caller_id_number} : '${escXml(cidNum)}')}"/>
         <action application="set" data="effective_caller_id_name=\${cond(\${caller_id_name} == '' ? '${escXml(cidName)}' : \${caller_id_name})}"/>
-        <action application="set" data="origination_caller_id_number=\${cond(\${caller_id_number} == '' ? '${escXml(cidNum)}' : \${caller_id_number})}"/>
+        <action application="set" data="origination_caller_id_number=\${cond(\${regex(\${caller_id_number}|^[0-9]{10,13}$)} == true ? \${caller_id_number} : '${escXml(cidNum)}')}"/>
         <action application="set" data="origination_caller_id_name=\${cond(\${caller_id_name} == '' ? '${escXml(cidName)}' : \${caller_id_name})}"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="bridge" data="sofia/gateway/${escXml(trunk)}/${escXml(prepend)}$1"/>
@@ -222,11 +241,11 @@ class OutboundRouteManager {
       </condition>
     </extension>
 
-    <!-- Discar para o Agente de Voz IA (9000 ou *1000) -->
+    <!-- Discar para o Agente de Voz IA (Ramais configurados ou range 9000-9999 / *1000 / ia) -->
     <extension name="ai_agent_call">
-      <condition field="destination_number" expression="^(9000|\\*1000|ia)$">
+      <condition field="destination_number" expression="${aiPattern}">
         <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="sofia/drachtio_mrf/9000@192.168.15.36:5060"/>
+        <action application="bridge" data="sofia/drachtio_mrf/\${destination_number}@192.168.15.36:5060"/>
       </condition>
     </extension>
 
@@ -257,11 +276,11 @@ ${renderRoutesXml()}
       </condition>
     </extension>
 
-    <!-- Discar para o Agente de Voz IA (9000 ou *1000) -->
+    <!-- Discar para o Agente de Voz IA (Ramais configurados ou range 9000-9999 / *1000 / ia) -->
     <extension name="mrf_ai_agent_call">
-      <condition field="destination_number" expression="^(9000|\\*1000|ia)$">
+      <condition field="destination_number" expression="${aiPattern}">
         <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="sofia/drachtio_mrf/9000@192.168.15.36:5060"/>
+        <action application="bridge" data="sofia/drachtio_mrf/\${destination_number}@192.168.15.36:5060"/>
       </condition>
     </extension>
 

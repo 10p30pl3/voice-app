@@ -67,24 +67,46 @@ class ElevenLabsS2SBridge extends EventEmitter {
     this.calibrationActive = true;
     this.calibrationSamplesRecv = 0;
 
-    this.profiles = {
-      SILENCE: {
-        fone: { base: 0.45, prefix: 300, silence: 750 },
-        viva: { base: 0.50, prefix: 350, silence: 800 }
+    this.profilesByLine = {
+      trunk_sip: {
+        SILENCE: {
+          fone: { base: 0.45, prefix: 200, silence: 400 },
+          viva: { base: 0.48, prefix: 220, silence: 440 }
+        },
+        OFFICE: {
+          fone: { base: 0.50, prefix: 220, silence: 450 },
+          viva: { base: 0.52, prefix: 250, silence: 480 }
+        },
+        STREET: {
+          fone: { base: 0.55, prefix: 250, silence: 500 },
+          viva: { base: 0.58, prefix: 280, silence: 540 }
+        },
+        TV: {
+          fone: { base: 0.62, prefix: 280, silence: 550 },
+          viva: { base: 0.65, prefix: 300, silence: 600 }
+        }
       },
-      OFFICE: {
-        fone: { base: 0.55, prefix: 400, silence: 800 },
-        viva: { base: 0.55, prefix: 500, silence: 850 }
-      },
-      STREET: {
-        fone: { base: 0.75, prefix: 500, silence: 900 },
-        viva: { base: 0.75, prefix: 600, silence: 950 }
-      },
-      TV: {
-        fone: { base: 0.95, prefix: 1000, silence: 1200 },
-        viva: { base: 0.95, prefix: 1200, silence: 1500 }
+      softphone: {
+        SILENCE: {
+          fone: { base: 0.45, prefix: 250, silence: 450 },
+          viva: { base: 0.48, prefix: 280, silence: 480 }
+        },
+        OFFICE: {
+          fone: { base: 0.50, prefix: 280, silence: 480 },
+          viva: { base: 0.55, prefix: 300, silence: 520 }
+        },
+        STREET: {
+          fone: { base: 0.58, prefix: 320, silence: 550 },
+          viva: { base: 0.62, prefix: 350, silence: 600 }
+        },
+        TV: {
+          fone: { base: 0.68, prefix: 350, silence: 620 },
+          viva: { base: 0.72, prefix: 400, silence: 680 }
+        }
       }
     };
+    this.lineType = 'trunk_sip';
+    this.profiles = this.profilesByLine.trunk_sip;
     this.currentProfile = 'SILENCE';
 
     this.elevenSocket = null;
@@ -696,6 +718,26 @@ class ElevenLabsS2SBridge extends EventEmitter {
     return entry;
   }
 
+  detectLineType() {
+    const cleanTo = String(this.called || '').replace(/\D/g, '');
+    const cleanFrom = String(this.caller || '').replace(/\D/g, '');
+
+    const headerLineType = String(this.sipHeaders?.['x-line-type'] || '').toLowerCase();
+    if (headerLineType === 'softphone' || headerLineType === 'trunk_sip') {
+      return headerLineType;
+    }
+
+    if (cleanTo.length >= 10 || cleanFrom.length >= 10) {
+      return 'trunk_sip';
+    }
+
+    if ((cleanTo.length >= 2 && cleanTo.length <= 5) || (cleanFrom.length >= 2 && cleanFrom.length <= 5)) {
+      return 'softphone';
+    }
+
+    return 'trunk_sip';
+  }
+
   async start({ callId, endpoint, dialog, caller = null, called = null }) {
     this.callId = callId;
     this.endpoint = endpoint;
@@ -708,6 +750,12 @@ class ElevenLabsS2SBridge extends EventEmitter {
     if (!this.channelUuid) {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
+
+    this.lineType = this.detectLineType();
+    this.profiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
+    console.log(
+      `[${this.callId}] 📞 Linha Detectada: [${this.lineType === 'trunk_sip' ? 'TRONCO SIP / TELEFONIA PÚBLICA' : 'SOFTPHONE INTERNO / TESTE'}] (De: ${this.caller || '--'} | Para: ${this.called || '--'})`
+    );
 
     const { model, voiceId, agentId } = this.getCredentials();
     console.log(
@@ -1007,11 +1055,12 @@ class ElevenLabsS2SBridge extends EventEmitter {
       this.calibrationActive = false;
       this.deviceMode = 'fone_ouvido';
       this.currentProfile = this.energyManager.getClassification();
-      const config = this.profiles[this.currentProfile].fone;
+      const lineProfiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
+      const config = lineProfiles[this.currentProfile].fone;
       vadThreshold = Number(this.tenant?.vadThreshold || config.base);
-      silenceDurationMs = Number(this.tenant?.silenceDurationMs || Math.max(750, config.silence));
+      silenceDurationMs = Number(this.tenant?.silenceDurationMs || config.silence);
       console.log(
-        `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms (Sonar pulado para 0ms de atraso)`
+        `[${this.callId}] ⚡ FAST-LOCK (Pós-AMD): Linha ${this.lineType.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms (Sonar pulado para 0ms de atraso)`
       );
 
       if (['STREET', 'TV', 'OFFICE'].includes(this.currentProfile) && (this.crosstalkMode === 'atual' || this.crosstalkMode === 'dsp')) {
@@ -1019,7 +1068,7 @@ class ElevenLabsS2SBridge extends EventEmitter {
       }
     } else if (bargeinLevel >= 3) {
       this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation false`);
-      await wait(400);
+      await wait(150);
       if (this.isTerminated || !this.endpoint) return;
 
       this.isToneProbe = true;
@@ -1049,13 +1098,14 @@ class ElevenLabsS2SBridge extends EventEmitter {
       }
 
       this.currentProfile = this.energyManager.getClassification();
-      const config = this.profiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
+      const lineProfiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
+      const config = lineProfiles[this.currentProfile][this.deviceMode === 'fone_ouvido' ? 'fone' : 'viva'];
 
       vadThreshold = Number(this.tenant?.vadThreshold || config.base);
-      silenceDurationMs = Number(this.tenant?.silenceDurationMs || Math.max(750, config.silence));
+      silenceDurationMs = Number(this.tenant?.silenceDurationMs || config.silence);
 
       console.log(
-        `[${this.callId}] 🎯 SONAR LOCK: Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms`
+        `[${this.callId}] 🎯 SONAR LOCK: Linha ${this.lineType.toUpperCase()} | Dispositivo ${this.deviceMode.toUpperCase()} | Ambiente ${this.currentProfile} | VAD ${vadThreshold} | Silêncio ${silenceDurationMs}ms`
       );
 
       if (['STREET', 'TV', 'OFFICE'].includes(this.currentProfile) && (this.crosstalkMode === 'atual' || this.crosstalkMode === 'dsp')) {
@@ -1314,6 +1364,7 @@ class ElevenLabsS2SBridge extends EventEmitter {
         isSecondaryVoiceBlocked: this.isSecondaryVoiceBlocked,
         dspMetrics: this.crosstalkFilter ? this.crosstalkFilter.getMetrics() : null
       },
+      lineType: this.lineType || 'trunk_sip',
       stsEngine: 'elevenlabs',
       codec: this.agentAudioFormat || 'pcm_8000',
       deviceMode: this.deviceMode,
