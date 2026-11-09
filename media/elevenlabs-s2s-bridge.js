@@ -272,7 +272,8 @@ class ElevenLabsS2SBridge extends EventEmitter {
   getCredentials() {
     const rawProv = aiProviderManager.getRaw('elevenlabs') || {};
     const apiKey = (this.tenant.elevenlabsApiKey || rawProv.apiKey || process.env.ELEVENLABS_API_KEY || '').trim();
-    const agentId = (this.tenant.elevenlabsAgentId || rawProv.agentId || process.env.ELEVENLABS_AGENT_ID || '').trim();
+    const DEFAULT_AGENT_ID = 'agent_01jvsk3cr8ep3an7shbcnfvt8d';
+    const agentId = (this.tenant.elevenlabsAgentId || rawProv.agentId || process.env.ELEVENLABS_AGENT_ID || DEFAULT_AGENT_ID).trim();
     const voiceId = (this.tenant.elevenlabsVoiceId || rawProv.defaultVoice || 'Rachel').trim();
     const model = (this.tenant.elevenlabsModel || rawProv.defaultModel || 'eleven_turbo_v2_5').trim();
 

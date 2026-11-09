@@ -17,7 +17,7 @@ const os = require('os');
 const WebSocket = require('ws');
 const { execFileSync } = require('child_process');
 
-const { WhisperPool, WhisperSession, upsample8to16 } = require('./media/whisper-client');
+const { WhisperPool, WhisperSession } = require('./media/whisper-client');
 const FreeSwitchPool = require('./utils/freeswitch-pool');
 const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
@@ -25,20 +25,15 @@ const { CallRecorder, formatDateTime } = require('./utils/call-recorder');
 const { createApiRouter } = require('./utils/api-router');
 const http = require('http');
 
-// Extrai helpers de áudio do index.js para teste unitário
+const {
+  upsample8to16,
+  upsample8to24,
+  downsample24to8,
+  linear16ToMulaw,
+  mulawToLinear16
+} = require('./utils/audio-dsp');
+
 const indexContent = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
-
-function extractFunc(name) {
-  const regex = new RegExp(`function ${name}\\([\\s\\S]+?\\n\\}`);
-  const match = indexContent.match(regex);
-  if (!match) throw new Error(`Função ${name} não encontrada em index.js`);
-  return eval(`(${match[0]})`);
-}
-
-const upsample8to24 = extractFunc('upsample8to24');
-const downsample24to8 = extractFunc('downsample24to8');
-const linear16ToMulaw = extractFunc('linear16ToMulaw');
-const mulawToLinear16 = extractFunc('mulawToLinear16');
 
 async function runQaSuite() {
   console.log('====================================================');
