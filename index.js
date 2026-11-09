@@ -37,6 +37,16 @@ const { CallRecorder, formatDateTime } = require('./utils/call-recorder');
 const CallHistoryManager = require('./utils/call-history-manager');
 const ExtensionManager = require('./utils/extension-manager');
 const { createApiRouter } = require('./utils/api-router');
+const aiProviderManager = require('./utils/ai-provider-manager');
+const ElevenLabsS2SBridge = require('./media/elevenlabs-s2s-bridge');
+
+function createAiBridge(tenant, sipHeaders) {
+  const engine = (tenant?.stsEngine || 'openai').toLowerCase();
+  if (engine === 'elevenlabs') {
+    return new ElevenLabsS2SBridge(tenant, sipHeaders, { callHistoryManager });
+  }
+  return new OpenAIS2SBridge(tenant, sipHeaders);
+}
 
 const srf = new Srf();
 const mrf = new Mrf(srf);
@@ -188,7 +198,9 @@ class OpenAIS2SBridge {
     this.tenant = tenant;
     this.sipHeaders = sipHeaders;
     this.whisperSession = null;
-    this.useG711 = tenant.audioCodec === 'g711_ulaw';
+    const provider = aiProviderManager.get('openai');
+    const codec = provider?.audioCodec || tenant.audioCodec || process.env.AUDIO_CODEC_MODE || 'g711_ulaw';
+    this.useG711 = codec === 'g711_ulaw';
     this.endpoint = null;
     this.dialog = null;
     this.channelUuid = null;
@@ -1761,10 +1773,40 @@ async function originateOutboundCall(params) {
       `[${callId}] 📤 Chamada OUTBOUND conectada de ${from} para ${to} | Tenant: [${tenant.id}] | Filtro: [${outFilterMode.toUpperCase()}] | Nó Mídia: [${fsNode.id}]`
     );
 
-    bridge = new OpenAIS2SBridge(tenant, sipHeaders);
+    bridge = createAiBridge(tenant, sipHeaders);
     activeBridges.set(callId, bridge);
     try {
       if (callHistoryManager) {
+        const engine = tenant.stsEngine || 'openai';
+        const initialLogs = [
+          {
+            timestamp: new Date().toISOString(),
+            type: 'SIP_INVITE',
+            message: `SIP INVITE outbound enviado de ${from} para ${to}`,
+            details: `Tronco SIP / Gateway | AMD: ${params.amd ? 'Ativo' : 'Desativado'}`
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'SIP_200_OK',
+            message: `Chamada outbound atendida pelo destinatário (200 OK)`,
+            details: `Canal FreeSWITCH: ${endpoint ? endpoint.uuid : '--'} | Nó: ${fsNode.id}`
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'AUDIO_FORK',
+            message: `Streaming de mídia bidirecional conectado (mod_audio_fork)`,
+            details: `Codec: G.711 u-law / 8000Hz mono PCM L16`
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'AI_STS',
+            message: `Motor de IA conectado: [${engine.toUpperCase()}]`,
+            details: engine === 'elevenlabs'
+              ? `Agent ID: ${tenant.elevenlabsAgentId || '--'} | Voz: ${tenant.elevenlabsVoiceId || 'Rachel'}`
+              : `Modelo: ${tenant.openaiModel || 'gpt-realtime-2.1-mini'} | Voz: ${tenant.voice || 'marin'}`
+          }
+        ];
+
         callHistoryManager.recordCallStart({
           callId,
           channelUuid: endpoint ? endpoint.uuid : null,
@@ -1772,8 +1814,11 @@ async function originateOutboundCall(params) {
           tenantId: tenant.id,
           caller: from,
           called: to,
+          fsNodeId: fsNode.id,
+          stsEngine: engine,
           startedAt: new Date().toISOString(),
-          amdEnabled: Boolean(params.amd)
+          amdEnabled: Boolean(params.amd),
+          telephonyLogs: initialLogs
         });
       }
     } catch {}
@@ -1785,6 +1830,12 @@ async function originateOutboundCall(params) {
       console.log(`[${callId}] Limpando chamada outbound (Motivo: ${reason})...`);
       try {
         if (bridge && callHistoryManager) {
+          callHistoryManager.addTelephonyLog(callId, {
+            timestamp: new Date().toISOString(),
+            type: 'SIP_BYE',
+            message: `SIP BYE / Chamada outbound finalizada`,
+            details: `Motivo: ${reason} | Encerrado por: ${reason.includes('destroy') ? 'remoto' : 'sistema'}`
+          });
           const callInfo = bridge.getCallInfo(true);
           const aiUsage = (aiCostTracker && typeof aiCostTracker.getCostByCallId === 'function')
             ? aiCostTracker.getCostByCallId(callId)
@@ -1914,7 +1965,8 @@ mediaServer.setApiHandler(
     callHistoryManager,
     aiCostTracker,
     extensionManager,
-    outboundRouteManager
+    outboundRouteManager,
+    aiProviderManager
   })
 );
 
@@ -2027,19 +2079,65 @@ srf.invite(async (req, res) => {
       `[${callId}] 📞 Chamada atendida de ${caller} para ${called} | Tenant: [${tenant.id}] | Filtro: [${resolvedFilterMode.toUpperCase()}] | Nó Mídia: [${fsNode.id}] (Ativas no nó: ${fsNode.activeCalls})`
     );
 
-    bridge = new OpenAIS2SBridge(tenant, sipHeaders);
+    bridge = createAiBridge(tenant, sipHeaders);
     activeBridges.set(callId, bridge);
     try {
       if (callHistoryManager) {
+        const sipCallId = (req.get && req.get('Call-ID')) || callId;
+        const userAgent = (req.get && req.get('User-Agent')) || 'SIP Phone';
+        const remoteIp = req.source_address ? `${req.source_address}:${req.source_port || 5060}` : null;
+        const engine = tenant.stsEngine || 'openai';
+
+        const initialLogs = [
+          {
+            timestamp: new Date().toISOString(),
+            type: 'SIP_INVITE',
+            message: `SIP INVITE recebido de ${caller} para ${called}`,
+            details: `Via ${req.protocol || 'UDP'} ${remoteIp || 'N/A'} | User-Agent: ${userAgent}`
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'SIP_200_OK',
+            message: `Chamada atendida (200 OK) pelo Gateway SIP`,
+            details: `SIP Call-ID: ${sipCallId}`
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'FS_MEDIA',
+            message: `Canal FreeSWITCH alocado no nó [${fsNode.id}]`,
+            details: `UUID: ${endpoint ? endpoint.uuid : '--'} | ESL: ${fsNode.host || '127.0.0.1'}`
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'AUDIO_FORK',
+            message: `Streaming de mídia bidirecional conectado (mod_audio_fork)`,
+            details: `Codec: G.711 u-law / 8000Hz mono PCM L16`
+          },
+          {
+            timestamp: new Date().toISOString(),
+            type: 'AI_STS',
+            message: `Motor de IA conectado: [${engine.toUpperCase()}]`,
+            details: engine === 'elevenlabs'
+              ? `Agent ID: ${tenant.elevenlabsAgentId || '--'} | Voz: ${tenant.elevenlabsVoiceId || 'Rachel'}`
+              : `Modelo: ${tenant.openaiModel || 'gpt-realtime-2.1-mini'} | Voz: ${tenant.voice || 'marin'}`
+          }
+        ];
+
         callHistoryManager.recordCallStart({
           callId,
+          sipCallId,
+          userAgent,
+          remoteAddress: remoteIp,
+          fsNodeId: fsNode.id,
+          stsEngine: engine,
           channelUuid: endpoint ? endpoint.uuid : null,
           direction: 'inbound',
           tenantId: tenant.id,
           caller,
           called,
           startedAt: new Date().toISOString(),
-          amdEnabled: Boolean(tenant.amd?.enabled)
+          amdEnabled: Boolean(tenant.amd?.enabled),
+          telephonyLogs: initialLogs
         });
       }
     } catch {}
@@ -2051,6 +2149,12 @@ srf.invite(async (req, res) => {
       console.log(`[${callId}] Limpando recursos da chamada (Motivo: ${reason})...`);
       try {
         if (bridge && callHistoryManager) {
+          callHistoryManager.addTelephonyLog(callId, {
+            timestamp: new Date().toISOString(),
+            type: 'SIP_BYE',
+            message: `SIP BYE / Chamada outbound finalizada`,
+            details: `Motivo: ${reason} | Encerrado por: ${reason.includes('destroy') ? 'remoto' : 'sistema'}`
+          });
           const callInfo = bridge.getCallInfo(true);
           const aiUsage = (aiCostTracker && typeof aiCostTracker.getCostByCallId === 'function')
             ? aiCostTracker.getCostByCallId(callId)
