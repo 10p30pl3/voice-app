@@ -133,8 +133,9 @@ class CallRecorder {
    * @param {'Cliente'|'Atendente'} speaker Papel do interlocutor ('Cliente' ou 'Atendente')
    * @param {string} text Conteúdo transcrito
    * @param {Date} [date] Data/hora opcional (padrão: agora)
+   * @param {Object} [extra] Metadados opcionais como delayMs e delayLabel
    */
-  addTranscript(speaker, text, date = new Date()) {
+  addTranscript(speaker, text, date = new Date(), extra = {}) {
     if (this.isStopped || this.isPaused) return null;
     const cleanText = String(text || '').trim();
     if (!cleanText) return null;
@@ -143,16 +144,46 @@ class CallRecorder {
     const timestamp = formatDateTime(date);
     const formatted = `[${timestamp}] ${role}: ${cleanText}`;
 
+    const nowMs = date.getTime();
+    let delayMs = extra.delayMs !== undefined ? extra.delayMs : null;
+    let delayLabel = extra.delayLabel || null;
+
+    if (role === 'Cliente') {
+      this.lastClientTime = nowMs;
+    } else {
+      if (delayMs === null && this.lastClientTime) {
+        delayMs = Math.max(0, nowMs - this.lastClientTime);
+        this.lastClientTime = null;
+      }
+      if (!delayLabel) {
+        if (delayMs !== null) {
+          if (delayMs === 0) {
+            delayLabel = 'Delay: < 1s';
+          } else if (delayMs < 1000) {
+            delayLabel = `Delay: ${delayMs}ms`;
+          } else {
+            const sec = delayMs / 1000;
+            delayLabel = `Delay: ${sec >= 10 ? Math.round(sec) : sec.toFixed(1)}s`;
+          }
+        } else if (!this.hasHadClientTurn) {
+          delayLabel = 'Saudação';
+        }
+      }
+      this.hasHadClientTurn = true;
+    }
+
     const entry = {
       timestamp,
       speaker: role,
       text: cleanText,
+      delayMs,
+      delayLabel,
       formatted
     };
 
     this.transcriptEntries.push(entry);
     if (!this.silent) {
-      console.log(`[${this.callId}] 📝 ${formatted}`);
+      console.log(`[${this.callId}] 📝 ${formatted}${delayLabel ? ` [${delayLabel}]` : ''}`);
     }
 
     if (this.isStarted && this.transcriptStream && !this.transcriptStream.writableEnded) {

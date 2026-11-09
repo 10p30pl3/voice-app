@@ -5913,6 +5913,63 @@
       `;
     }
 
+    function parseTurnDate(str) {
+      if (!str) return null;
+      try {
+        const cleaned = String(str).trim().replace(' ', 'T');
+        const d = new Date(cleaned);
+        return isNaN(d.getTime()) ? null : d.getTime();
+      } catch {
+        return null;
+      }
+    }
+
+    function enrichTurnsWithDelay(turns) {
+      if (!Array.isArray(turns)) return [];
+      let lastClientTime = null;
+
+      return turns.map(t => {
+        const isClient = t.speaker === 'Cliente' || t.speaker === 'user';
+        const timestampMs = t.timestampMs || parseTurnDate(t.timestamp);
+
+        if (isClient) {
+          lastClientTime = timestampMs;
+          return { ...t, isClient: true, timestampMs };
+        }
+
+        // Atendente IA
+        let delayMs = (t.delayMs !== undefined && t.delayMs !== null) ? t.delayMs : null;
+        let delayLabel = t.delayLabel || '';
+
+        if (!delayLabel) {
+          if (delayMs !== null) {
+            if (delayMs === 0) {
+              delayLabel = 'Delay: < 1s';
+            } else if (delayMs < 1000) {
+              delayLabel = `Delay: ${delayMs}ms`;
+            } else {
+              const sec = delayMs / 1000;
+              delayLabel = `Delay: ${sec >= 10 ? Math.round(sec) : sec.toFixed(1)}s`;
+            }
+          } else if (lastClientTime && timestampMs && timestampMs >= lastClientTime) {
+            delayMs = timestampMs - lastClientTime;
+            if (delayMs === 0) {
+              delayLabel = 'Delay: < 1s';
+            } else if (delayMs < 1000) {
+              delayLabel = `Delay: ${delayMs}ms`;
+            } else {
+              const sec = delayMs / 1000;
+              delayLabel = `Delay: ${sec >= 10 ? Math.round(sec) : sec.toFixed(1)}s`;
+            }
+          } else if (!lastClientTime) {
+            delayLabel = 'Saudação';
+          }
+        }
+
+        return { ...t, isClient: false, timestampMs, delayMs, delayLabel };
+      });
+    }
+
     function renderSingleTurnHtml(t) {
       if (!t) return '';
       const isClient = t.speaker === 'Cliente' || t.speaker === 'user';
@@ -5923,12 +5980,19 @@
       const bubbleBorder = isClient ? 'var(--brand-active-border)' : 'var(--border)';
       const borderLeft = isClient ? 'var(--primary)' : 'var(--border-strong)';
 
+      const delayBadge = (!isClient && t.delayLabel)
+        ? `<span class="badge-delay" style="display: inline-flex; align-items: center; gap: 3.5px; font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--bg-surface); color: var(--text-muted); border: 1px solid var(--border); font-weight: 600; font-family: monospace; margin-left: 8px;" title="Tempo de resposta da IA após a pergunta do cliente">⏱️ ${escapeHtml(t.delayLabel)}</span>`
+        : '';
+
       return `
         <div class="transcript-bubble" style="margin-bottom: 12px; padding: 11px 14px; background: ${bubbleBg}; border: 1px solid ${bubbleBorder}; border-left: 3px solid ${borderLeft}; border-radius: 8px; box-shadow: var(--shadow-sm);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-            <span style="font-size: 12px; color: ${badgeColor}; font-weight: 700; display: inline-flex; align-items: center; gap: 6px;">
-              ${icon} ${escapeHtml(speakerName)}
-            </span>
+            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px;">
+              <span style="font-size: 12px; color: ${badgeColor}; font-weight: 700; display: inline-flex; align-items: center; gap: 6px;">
+                ${icon} ${escapeHtml(speakerName)}
+              </span>
+              ${delayBadge}
+            </div>
             <span style="font-size: 11px; color: var(--text-muted); font-family: monospace;">${escapeHtml(t.timestamp || '')}</span>
           </div>
           <div style="font-size: 13px; line-height: 1.5; color: var(--text-main); word-break: break-word;">${escapeHtml(t.text)}</div>
@@ -6124,7 +6188,8 @@
 
         if (turns.length > modalRenderedTurnsCount) {
           const isNearBottom = (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 120;
-          const newTurns = turns.slice(modalRenderedTurnsCount);
+          const enriched = enrichTurnsWithDelay(turns);
+          const newTurns = enriched.slice(modalRenderedTurnsCount);
 
           const newHtml = newTurns.map(t => renderSingleTurnHtml(t)).join('');
           bodyEl.insertAdjacentHTML('beforeend', newHtml);
@@ -6298,7 +6363,8 @@
       const isFirstRender = modalRenderedTurnsCount === 0;
       const isNearBottom = isFirstRender || (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 120;
 
-      bodyEl.innerHTML = turns.map(t => renderSingleTurnHtml(t)).join('');
+      const enriched = enrichTurnsWithDelay(turns);
+      bodyEl.innerHTML = enriched.map(t => renderSingleTurnHtml(t)).join('');
       modalRenderedTurnsCount = turns.length;
 
       if (isNearBottom) {

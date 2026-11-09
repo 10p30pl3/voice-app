@@ -1323,15 +1323,38 @@ class OpenAIS2SBridge {
     const role = speaker === 'Atendente' ? 'Atendente' : 'Cliente';
     const timestamp = formatDateTime();
     const formatted = `[${timestamp}] ${role}: ${cleanText}`;
-    let entry = { timestamp, speaker: role, text: cleanText, formatted };
+
+    let delayMs = null;
+    let delayLabel = null;
+    if (role === 'Cliente') {
+      this.lastClientTurnTime = now;
+    } else {
+      if (this.lastClientTurnTime) {
+        delayMs = Math.max(0, now - this.lastClientTurnTime);
+        this.lastClientTurnTime = null;
+        if (delayMs === 0) {
+          delayLabel = 'Delay: < 1s';
+        } else if (delayMs < 1000) {
+          delayLabel = `Delay: ${delayMs}ms`;
+        } else {
+          const sec = delayMs / 1000;
+          delayLabel = `Delay: ${sec >= 10 ? Math.round(sec) : sec.toFixed(1)}s`;
+        }
+      } else if (!this.hasHadClientTurn) {
+        delayLabel = 'Saudação';
+      }
+      this.hasHadClientTurn = true;
+    }
+
+    let entry = { timestamp, speaker: role, text: cleanText, delayMs, delayLabel, formatted };
 
     if (this.recorder && !this.recorder.isStopped && !this.recorder.isPaused) {
-      const recEntry = this.recorder.addTranscript(role, cleanText);
+      const recEntry = this.recorder.addTranscript(role, cleanText, new Date(), { delayMs, delayLabel });
       if (recEntry) {
         entry = recEntry;
       }
     } else {
-      console.log(`[${this.callId}] 📝 ${formatted}`);
+      console.log(`[${this.callId}] 📝 ${formatted}${delayLabel ? ` [${delayLabel}]` : ''}`);
     }
 
     this.transcriptLog.push(entry);
