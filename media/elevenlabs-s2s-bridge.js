@@ -70,38 +70,38 @@ class ElevenLabsS2SBridge extends EventEmitter {
     this.profilesByLine = {
       trunk_sip: {
         SILENCE: {
-          fone: { base: 0.45, prefix: 200, silence: 400 },
-          viva: { base: 0.48, prefix: 220, silence: 440 }
+          fone: { base: 0.45, prefix: 150, silence: 250 },
+          viva: { base: 0.48, prefix: 160, silence: 270 }
         },
         OFFICE: {
-          fone: { base: 0.50, prefix: 220, silence: 450 },
-          viva: { base: 0.52, prefix: 250, silence: 480 }
+          fone: { base: 0.50, prefix: 160, silence: 270 },
+          viva: { base: 0.52, prefix: 180, silence: 280 }
         },
         STREET: {
-          fone: { base: 0.55, prefix: 250, silence: 500 },
-          viva: { base: 0.58, prefix: 280, silence: 540 }
+          fone: { base: 0.55, prefix: 180, silence: 280 },
+          viva: { base: 0.58, prefix: 200, silence: 290 }
         },
         TV: {
-          fone: { base: 0.62, prefix: 280, silence: 550 },
-          viva: { base: 0.65, prefix: 300, silence: 600 }
+          fone: { base: 0.62, prefix: 200, silence: 290 },
+          viva: { base: 0.65, prefix: 200, silence: 300 }
         }
       },
       softphone: {
         SILENCE: {
-          fone: { base: 0.45, prefix: 250, silence: 450 },
-          viva: { base: 0.48, prefix: 280, silence: 480 }
+          fone: { base: 0.45, prefix: 150, silence: 250 },
+          viva: { base: 0.48, prefix: 160, silence: 270 }
         },
         OFFICE: {
-          fone: { base: 0.50, prefix: 280, silence: 480 },
-          viva: { base: 0.55, prefix: 300, silence: 520 }
+          fone: { base: 0.50, prefix: 160, silence: 270 },
+          viva: { base: 0.55, prefix: 180, silence: 280 }
         },
         STREET: {
-          fone: { base: 0.58, prefix: 320, silence: 550 },
-          viva: { base: 0.62, prefix: 350, silence: 600 }
+          fone: { base: 0.58, prefix: 180, silence: 280 },
+          viva: { base: 0.62, prefix: 200, silence: 290 }
         },
         TV: {
-          fone: { base: 0.68, prefix: 350, silence: 620 },
-          viva: { base: 0.72, prefix: 400, silence: 680 }
+          fone: { base: 0.68, prefix: 200, silence: 290 },
+          viva: { base: 0.72, prefix: 200, silence: 300 }
         }
       }
     };
@@ -262,6 +262,7 @@ class ElevenLabsS2SBridge extends EventEmitter {
 
     if (this.endpoint && this.channelUuid && !this.isTerminated) {
       await this.safeApi(`uuid_audio ${this.channelUuid} stop read`);
+      await this.safeApi(`uuid_audio ${this.channelUuid} stop`);
     }
 
     console.log(
@@ -480,7 +481,6 @@ class ElevenLabsS2SBridge extends EventEmitter {
 
         this.agentSilenceTimer = setTimeout(() => {
           if (this.isAgentTalking) {
-            this.isAgentTalking = false;
             this.turnAudioBytes = 0;
             this.turnPlaybackStartTime = null;
             this.resampler24to8.reset();
@@ -489,6 +489,11 @@ class ElevenLabsS2SBridge extends EventEmitter {
             console.log(`[${this.callId}] 🔊 Fim da reprodução de áudio da IA (ElevenLabs).`);
             if (this.mediaBridge) {
               this.mediaBridge.endPlaybackStream();
+              if (!this.mediaBridge.isPlaying) {
+                this.isAgentTalking = false;
+              }
+            } else {
+              this.isAgentTalking = false;
             }
           }
 
@@ -829,13 +834,14 @@ class ElevenLabsS2SBridge extends EventEmitter {
         `[${this.callId}] 🔇 [BARGE-IN DINÂMICO] Canal do microfone do cliente CORTADO no FreeSWITCH durante a frase inicial do agente.`
       );
 
-      // Timeout de segurança (20s) para garantir abertura do canal caso haja falha inesperada
+      // Timeout de segurança dinâmico para garantir abertura rápida do canal caso haja lentidão na IA
+      const safetyGraceMs = Math.min(4500, Math.max(2500, (this.bargeinGraceSec || 3) * 1000));
       this.greetingSafetyTimer = setTimeout(() => {
         if (this.isGreetingInProgress && !this.isTerminated) {
-          console.warn(`[${this.callId}] ⏱️ [BARGE-IN DINÂMICO] Timeout de segurança de saudação (20s). Liberando canal do cliente.`);
+          console.warn(`[${this.callId}] ⏱️ [BARGE-IN DINÂMICO] Timeout de segurança de saudação (${safetyGraceMs}ms). Liberando canal do cliente.`);
           this.openCustomerChannel('safety_timeout');
         }
-      }, 20000);
+      }, safetyGraceMs);
     }
 
     this.maxDurationSec = Number(
@@ -959,11 +965,16 @@ class ElevenLabsS2SBridge extends EventEmitter {
     this.safeApi(`uuid_setvar ${this.channelUuid} noise_suppression true`);
 
     let vadThreshold = 0.45;
-    let silenceDurationMs = 500;
+    let silenceDurationMs = 280;
 
     // 3. Inicia ponte de áudio recebendo Buffer binário direto
     this.energyManager.reset();
     this.calibrationActive = true;
+
+    this.mediaBridge.on('playback_ended', () => {
+      this.isAgentTalking = false;
+      this.agentPlaybackStartTime = null;
+    });
 
     await this.mediaBridge.start({
       callId: this.callId,
@@ -1033,13 +1044,23 @@ class ElevenLabsS2SBridge extends EventEmitter {
           );
         }
 
-        const effectiveBuffer = isPrimaryVoice ? buffer : Buffer.alloc(buffer.length);
+        // Proteção contra corte de canal: só substitui por silêncio em carência inicial, AMD,
+        // tom probe, voz secundária neural confirmada ou ruído residual puro (<200 RMS).
+        let effectiveBuffer = buffer;
+        if (isGraceActive || this.isToneProbe || amdStillDeciding) {
+          effectiveBuffer = Buffer.alloc(buffer.length);
+        } else if (this.isNeuralFilterActive && this.isSecondaryVoiceBlocked) {
+          effectiveBuffer = Buffer.alloc(buffer.length);
+        } else if (this.isDspFilterActive && !isPrimaryVoiceDsp && (this.crosstalkFilter?.lastRms || 0) < 200) {
+          effectiveBuffer = Buffer.alloc(buffer.length);
+        }
 
         // Barge-in Instantâneo (<20ms): só interrompe se for fala ativa legítima e fora da carência
         const isActivelySpeaking = this.crosstalkFilter
           ? this.crosstalkFilter.isActivelySpeaking()
           : this.frameVad.process(buffer);
-        if (isPrimaryVoice && isActivelySpeaking && this.isAgentTalking && this.canTriggerBargeIn()) {
+        const isAgentReallyPlaying = this.isAgentTalking || (this.mediaBridge && this.mediaBridge.isPlaying);
+        if (isPrimaryVoice && isActivelySpeaking && isAgentReallyPlaying && this.canTriggerBargeIn()) {
           this.triggerBargeIn(this.isNeuralFilterActive ? `biometric_${this.crosstalkMode}` : 'local_biometric_vad');
         }
 
