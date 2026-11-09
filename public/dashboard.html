@@ -1752,6 +1752,86 @@
       animation: fadeInBubble 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
+    /* Modal de Transcrição e Telefonia SIP - Duas Colunas com Scroll Vertical Perfeito */
+    .modal-transcript-card {
+      max-width: 1160px !important;
+      width: 95vw !important;
+      height: 88vh !important;
+      max-height: 90vh !important;
+      display: flex !important;
+      flex-direction: column !important;
+    }
+    .modal-transcript-grid {
+      flex: 1 1 0% !important;
+      min-height: 0 !important;
+      display: grid !important;
+      grid-template-columns: 1fr 1fr !important;
+      grid-template-rows: minmax(0, 1fr) !important;
+      gap: 16px !important;
+      padding: 18px 24px !important;
+      overflow: hidden !important;
+      background: var(--bg-page) !important;
+    }
+    @media (max-width: 860px) {
+      .modal-transcript-grid {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: 1fr 1fr !important;
+        overflow-y: auto !important;
+      }
+    }
+    .modal-transcript-col {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0 !important;
+      height: 100% !important;
+      box-shadow: var(--shadow-sm);
+    }
+    .transcript-chat-scroll {
+      flex: 1 1 0% !important;
+      min-height: 0 !important;
+      max-height: 100% !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      padding: 12px !important;
+      background: var(--bg-page) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 10px !important;
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 10px !important;
+      scrollbar-width: thin !important;
+      scrollbar-color: var(--border-hover) transparent !important;
+    }
+    .transcript-tech-scroll {
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      scrollbar-width: thin !important;
+      scrollbar-color: var(--border-hover) transparent !important;
+      gap: 14px;
+    }
+    .transcript-chat-scroll::-webkit-scrollbar,
+    .transcript-tech-scroll::-webkit-scrollbar {
+      width: 6px !important;
+      height: 6px !important;
+    }
+    .transcript-chat-scroll::-webkit-scrollbar-track,
+    .transcript-tech-scroll::-webkit-scrollbar-track {
+      background: transparent !important;
+    }
+    .transcript-chat-scroll::-webkit-scrollbar-thumb,
+    .transcript-tech-scroll::-webkit-scrollbar-thumb {
+      background-color: var(--border-hover) !important;
+      border-radius: 6px !important;
+    }
+    .transcript-chat-scroll::-webkit-scrollbar-thumb:hover,
+    .transcript-tech-scroll::-webkit-scrollbar-thumb:hover {
+      background-color: var(--text-muted) !important;
+    }
+
     /* Voice Features Panel */
     .voice-features-container {
       background: var(--bg-card);
@@ -3474,8 +3554,8 @@
 
   <!-- MODAL: Ver Transcrição & Logs SIP / Telefonia em Duas Colunas -->
   <div class="modal-overlay" id="modal-transcript-view" onclick="if(event.target === this) closeTranscriptModal()">
-    <div class="modal-card" style="max-width: 1160px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
-      <div class="modal-header" style="padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface);">
+    <div class="modal-card modal-transcript-card">
+      <div class="modal-header" style="padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); flex-shrink: 0;">
         <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
           <h3 style="font-size: 16px; font-weight: 700; margin: 0; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
             <span>🎧</span>
@@ -3494,9 +3574,9 @@
         <button class="btn btn-sm" onclick="closeTranscriptModal()" style="padding: 4px 8px; font-size: 13px;">✕</button>
       </div>
 
-      <div class="modal-body" style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 18px 24px; overflow: hidden; background: var(--bg-page); min-height: 500px; max-height: calc(90vh - 130px);" id="transcript-modal-grid">
+      <div class="modal-body modal-transcript-grid" id="transcript-modal-grid">
         <!-- COLUNA ESQUERDA: Conectividade & Detalhes Técnicos (Telefonia & SIP) -->
-        <div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; box-shadow: var(--shadow-sm);" id="transcript-col-tech">
+        <div class="modal-transcript-col transcript-tech-scroll" id="transcript-col-tech">
           <div style="text-align: center; color: var(--text-muted); padding: 40px;">
             <div style="font-size: 24px; margin-bottom: 6px;">⏳</div>
             <div>Carregando logs de telefonia e conectividade...</div>
@@ -3504,8 +3584,8 @@
         </div>
 
         <!-- COLUNA DIREITA: Conversa / Transcrição Dialogada -->
-        <div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--shadow-sm);" id="transcript-col-chat">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div class="modal-transcript-col" id="transcript-col-chat" style="overflow: hidden;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-shrink: 0;">
             <div style="font-size: 13px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
               <span>💬</span>
               <span>Transcrição da Conversa</span>
@@ -3517,16 +3597,16 @@
           </div>
 
           <!-- Áudio Player (se existir arquivo WAV) -->
-          <div id="transcript-audio-player-container" style="display: none; margin-bottom: 12px;"></div>
+          <div id="transcript-audio-player-container" style="display: none; margin-bottom: 12px; flex-shrink: 0;"></div>
 
-          <!-- Lista de mensagens com design nativo do portal -->
-          <div style="flex: 1; overflow-y: auto; padding: 12px; background: var(--bg-page); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; gap: 10px;" id="transcript-modal-body">
+          <!-- Lista de mensagens com design nativo do portal e scroll vertical -->
+          <div class="transcript-chat-scroll" id="transcript-modal-body">
             Carregando conversa...
           </div>
         </div>
       </div>
 
-      <div class="modal-footer" style="padding: 14px 24px; background: var(--bg-surface); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+      <div class="modal-footer" style="padding: 14px 24px; background: var(--bg-surface); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
         <div id="transcript-modal-footer-info" style="font-size: 11.5px; color: var(--text-muted); font-family: monospace;">
           Call ID: --
         </div>
@@ -5998,7 +6078,7 @@
         }
 
         if (turns.length > modalRenderedTurnsCount) {
-          const isNearBottom = (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 80;
+          const isNearBottom = (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 120;
           const newTurns = turns.slice(modalRenderedTurnsCount);
 
           const newHtml = newTurns.map(t => renderSingleTurnHtml(t)).join('');
@@ -6008,7 +6088,9 @@
           currentRawTranscriptText = turns.map(t => t.formatted || `[${t.timestamp || ''}] ${t.speaker}: ${t.text}`).join('\n');
 
           if (isNearBottom) {
-            bodyEl.scrollTo({ top: bodyEl.scrollHeight, behavior: 'smooth' });
+            setTimeout(() => {
+              bodyEl.scrollTo({ top: bodyEl.scrollHeight, behavior: 'smooth' });
+            }, 20);
           }
         }
       }
@@ -6168,13 +6250,16 @@
 
       currentRawTranscriptText = turns.map(t => t.formatted || `[${t.timestamp || ''}] ${t.speaker}: ${t.text}`).join('\n');
 
-      const isNearBottom = (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 80;
+      const isFirstRender = modalRenderedTurnsCount === 0;
+      const isNearBottom = isFirstRender || (bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight) < 120;
 
       bodyEl.innerHTML = turns.map(t => renderSingleTurnHtml(t)).join('');
       modalRenderedTurnsCount = turns.length;
 
       if (isNearBottom) {
-        bodyEl.scrollTop = bodyEl.scrollHeight;
+        setTimeout(() => {
+          bodyEl.scrollTop = bodyEl.scrollHeight;
+        }, 20);
       }
     }
 
