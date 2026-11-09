@@ -461,8 +461,8 @@ class ElevenLabsS2SBridge extends EventEmitter {
       const msg = JSON.parse(data.toString());
 
       // 0. Metadados de inicialização da conversa
-      if (msg.type === 'conversation_initiation_metadata' && msg.conversation_initiation_metadata_event) {
-        const meta = msg.conversation_initiation_metadata_event;
+      if (msg.conversation_initiation_metadata_event || msg.type === 'conversation_initiation_metadata') {
+        const meta = msg.conversation_initiation_metadata_event || msg;
         this.agentAudioFormat = meta.agent_output_audio_format || 'pcm_8000';
         this.userInputAudioFormat = meta.user_input_audio_format || 'pcm_8000';
         this.conversationId = meta.conversation_id;

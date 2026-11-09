@@ -461,7 +461,12 @@ class OpenAIS2SBridge {
       return;
     }
 
-    const model = this.tenant.openaiModel || 'gpt-realtime-2.1-mini';
+    let model = (this.tenant.openaiModel || 'gpt-realtime-2.1-mini').trim();
+    // Mapeamento de compatibilidade para modelos Live e variantes para a Realtime API
+    if (model === 'gpt-live-1' || model === 'gpt-live-1-mini' || model.includes('live')) {
+      console.log(`[${this.callId}] ℹ️ Modelo configurado "${model}" mapeado para "gpt-realtime-2.1" no gateway Realtime.`);
+      model = 'gpt-realtime-2.1';
+    }
     const openaiUrl = `wss://api.openai.com/v1/realtime?model=${model}`;
 
     console.log(`[${this.callId}] ⚡ Conectando à OpenAI Realtime (${model}) em paralelo...`);
