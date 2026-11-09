@@ -1262,22 +1262,22 @@ class OpenAIS2SBridge {
       return this.lastTurn.entry;
     }
 
-    if (this.recorder && !this.recorder.isStopped && !this.recorder.isPaused) {
-      const entry = this.recorder.addTranscript(speaker, cleanText);
-      if (entry) {
-        this.transcriptLog.push(entry);
-        this.lastTurn = { speaker, text: cleanText, time: now, entry };
-        return entry;
-      }
-    }
-
     const role = speaker === 'Atendente' ? 'Atendente' : 'Cliente';
     const timestamp = formatDateTime();
     const formatted = `[${timestamp}] ${role}: ${cleanText}`;
-    const entry = { timestamp, speaker: role, text: cleanText, formatted };
+    let entry = { timestamp, speaker: role, text: cleanText, formatted };
+
+    if (this.recorder && !this.recorder.isStopped && !this.recorder.isPaused) {
+      const recEntry = this.recorder.addTranscript(role, cleanText);
+      if (recEntry) {
+        entry = recEntry;
+      }
+    } else {
+      console.log(`[${this.callId}] 📝 ${formatted}`);
+    }
+
     this.transcriptLog.push(entry);
     this.lastTurn = { speaker, text: cleanText, time: now, entry };
-    console.log(`[${this.callId}] 📝 ${formatted}`);
     try {
       if (callHistoryManager) {
         callHistoryManager.recordCallUpdate(this.callId, {
@@ -1373,6 +1373,9 @@ class OpenAIS2SBridge {
 
   interruptAgent() {
     this.isAgentTalking = false;
+    this.agentPlaybackStartTime = null;
+    this.resampler24to8.reset();
+    this.reconFilter8k.reset();
     this.mediaBridge.killAudio();
     if (this.openaiSocket && this.openaiSocket.readyState === WebSocket.OPEN) {
       this.openaiSocket.send(JSON.stringify({ type: 'response.cancel' }));
@@ -1752,7 +1755,9 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
   let releaseNodeSlot = null;
   let bridge = null;
   let dialog = null;
+  let endpoint = null;
   let tenantSlotReleased = false;
+  let cleanedUp = false;
 
   const releaseTenantSlotOnce = () => {
     if (tenantSlotReleased) return;
@@ -1773,12 +1778,13 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
 
     const customHeaders = params.headers || {};
 
-    const { endpoint, dialog: uacDialog, fsNode, releaseNodeSlot: rSlot } = await fsPool.originateCall(srf, {
+    const { endpoint: fsEndpoint, dialog: uacDialog, fsNode, releaseNodeSlot: rSlot } = await fsPool.originateCall(srf, {
       to,
       from,
       headers: customHeaders
     });
 
+    endpoint = fsEndpoint;
     dialog = uacDialog;
     releaseNodeSlot = rSlot;
     const callId = dialog.sip?.callId || `out-${Date.now()}`;
@@ -1858,7 +1864,6 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
       }
     } catch {}
 
-    let cleanedUp = false;
     const cleanupCall = async (reason = 'normal_hangup') => {
       if (cleanedUp) return;
       cleanedUp = true;
@@ -1964,9 +1969,19 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
   } catch (err) {
     releaseTenantSlotOnce();
     if (releaseNodeSlot) releaseNodeSlot();
+    if (endpoint) {
+      try {
+        endpoint.destroy();
+      } catch {}
+    }
     if (dialog) {
       try {
         dialog.destroy();
+      } catch {}
+    }
+    if (bridge) {
+      try {
+        await bridge.stop();
       } catch {}
     }
     // Grava tentativa com falha no histórico para que os logs reflitam o disparo imediatamente
@@ -2133,6 +2148,7 @@ srf.invite(async (req, res) => {
   let releaseNodeSlot;
   let bridge;
   let tenantSlotReleased = false;
+  let cleanedUp = false;
 
   const releaseTenantSlotOnce = () => {
     if (tenantSlotReleased) return;
@@ -2174,8 +2190,8 @@ srf.invite(async (req, res) => {
     );
 
     bridge = createAiBridge(tenant, sipHeaders);
-    bridge.attemptId = params.attemptId || null;
-    bridge.providerAttemptId = params.providerAttemptId || callId;
+    bridge.attemptId = (req.get && (req.get('X-Attempt-ID') || req.get('x-attempt-id'))) || null;
+    bridge.providerAttemptId = callId;
     activeBridges.set(callId, bridge);
     try {
       if (callHistoryManager) {
@@ -2207,7 +2223,7 @@ srf.invite(async (req, res) => {
             timestamp: new Date().toISOString(),
             type: 'AUDIO_FORK',
             message: `Streaming de mídia bidirecional conectado (mod_audio_fork)`,
-            details: `Codec: G.711 u-law / 8000Hz mono PCM L16`
+            details: `Codec: 8000Hz mono PCM L16 (FIR Blackman 31-tap)`
           },
           {
             timestamp: new Date().toISOString(),
@@ -2238,7 +2254,6 @@ srf.invite(async (req, res) => {
       }
     } catch {}
 
-    let cleanedUp = false;
     const cleanupCall = async (reason = 'normal_hangup') => {
       if (cleanedUp) return;
       cleanedUp = true;
