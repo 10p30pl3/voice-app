@@ -2216,7 +2216,7 @@ srf.register(async (req, res) => {
   const user = req.get('From') || req.uri;
   console.log(`[SIP Register] Recebido REGISTER na porta 5060 para ${user}, repassando para FreeSWITCH 5080...`);
   try {
-    const fsTarget = 'sip:192.168.15.36:5080';
+    const fsTarget = `sip:${process.env.SIP_INTERNAL_HOST || process.env.DRACHTIO_EXTERNAL_IP || process.env.SERVER_IP || '127.0.0.1'}:5080`;
     await srf.proxyRequest(req, fsTarget);
   } catch (err) {
     console.error('[SIP Register Proxy] Erro ao repassar registro:', err.message);

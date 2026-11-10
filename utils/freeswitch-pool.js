@@ -236,7 +236,7 @@ class FreeSwitchPool {
     try {
       endpoint = await node.mediaserver.createEndpoint();
       let sipUri = String(to || '').trim();
-      const fsHost = process.env.AUDIO_FORK_WS_HOST || '192.168.15.36';
+      const fsHost = process.env.SIP_INTERNAL_HOST || process.env.DRACHTIO_EXTERNAL_IP || process.env.SERVER_IP || process.env.AUDIO_FORK_WS_HOST || '127.0.0.1';
 
       if (sipUri.startsWith('sip:')) {
         if (!sipUri.includes('@')) {
