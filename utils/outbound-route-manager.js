@@ -228,12 +228,14 @@ class OutboundRouteManager {
         .join('\n\n');
     };
 
+    const drachtioHost = process.env.SIP_INTERNAL_HOST || process.env.DRACHTIO_EXTERNAL_IP || process.env.DRACHTIO_HOST || '127.0.0.1';
+
     return `<include>
   <!-- Contexto Default: Chamadas originadas por Ramais SIP Autenticados (1000 a 1010) -->
   <context name="default">
     <!-- Teste de Eco / Loopback de Audio (*99 ou echo) -->
     <extension name="echo_test">
-      <condition field="destination_number" expression="^(\\*99|echo|test)$">
+      <condition field="destination_number" expression="^(\\*?99|echo|test)$">
         <action application="answer"/>
         <action application="set" data="playback_terminators=none"/>
         <action application="sleep" data="500"/>
@@ -245,7 +247,7 @@ class OutboundRouteManager {
     <extension name="ai_agent_call">
       <condition field="destination_number" expression="${aiPattern}">
         <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="sofia/drachtio_mrf/\${destination_number}@192.168.15.36:5060"/>
+        <action application="bridge" data="sofia/drachtio_mrf/\${destination_number}@${drachtioHost}:5060"/>
       </condition>
     </extension>
 
@@ -280,7 +282,7 @@ ${renderRoutesXml()}
     <extension name="mrf_ai_agent_call">
       <condition field="destination_number" expression="${aiPattern}">
         <action application="set" data="hangup_after_bridge=true"/>
-        <action application="bridge" data="sofia/drachtio_mrf/\${destination_number}@192.168.15.36:5060"/>
+        <action application="bridge" data="sofia/drachtio_mrf/\${destination_number}@${drachtioHost}:5060"/>
       </condition>
     </extension>
 
@@ -296,7 +298,7 @@ ${renderRoutesXml()}
 
     <!-- Teste de Eco (*99 ou echo) -->
     <extension name="test_echo">
-      <condition field="destination_number" expression="^(\\*99|test|echo)$">
+      <condition field="destination_number" expression="^(\\*?99|test|echo)$">
         <action application="answer"/>
         <action application="set" data="playback_terminators=none"/>
         <action application="sleep" data="500"/>

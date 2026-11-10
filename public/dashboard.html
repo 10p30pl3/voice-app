@@ -5093,6 +5093,8 @@
             explanation = 'Serviço Indisponível (SIP 503). O cluster FreeSWITCH não conseguiu alocar o canal SIP ou rota.';
           } else if (rawMsg.includes('404')) {
             explanation = 'Destino Não Encontrado (SIP 404). Verifique o número ou ramal digitado.';
+          } else if (rawMsg.includes('484')) {
+            explanation = 'Destino Incompleto (SIP 484). Verifique se o número possui DDD (ex: 11999998888) ou utilize *99 para teste de eco.';
           }
 
           showToast(`Erro ao originar: ${rawMsg}`, 'error');
