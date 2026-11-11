@@ -37,8 +37,9 @@ class TrunkManager {
         direction: 'both',
         realm: 'sip1.directdial.com.br',
         proxy: 'sip1.directdial.com.br',
-        username: 'WTVNM',
-        register: false,
+        username: process.env.DIRECTCALL_USERNAME || 'WTVNM',
+        password: process.env.DIRECTCALL_PASSWORD || undefined,
+        register: Boolean(process.env.DIRECTCALL_REGISTER === 'true'),
         maxChannels: 30,
         active: true,
         external: false
@@ -108,7 +109,7 @@ class TrunkManager {
       add('retry-seconds', 30);
     } else {
       add('username', t.username || 'none');
-      add('password', t.password || 'none');
+      add('password', t.password || (t.id === 'directcall' ? process.env.DIRECTCALL_PASSWORD : null) || 'none');
       add('realm', t.realm || host);
       add('register', 'false');
     }

@@ -3160,16 +3160,26 @@
         <button class="btn btn-sm" onclick="closeModal('modal-originate')">✕</button>
       </div>
       <div class="modal-body">
-        <div class="form-group">
+        <!-- SELETOR DE MODO DE TESTE -->
+        <div style="display: flex; gap: 8px; margin-bottom: 14px; background: var(--bg-hover); padding: 4px; border-radius: 8px;">
+          <button type="button" id="tab-orig-echo" class="btn btn-sm" style="flex: 1; font-weight: 600; background: var(--primary); color: #fff;" onclick="selectOriginateMode('echo')">
+            🔊 Teste de Eco (*99)
+          </button>
+          <button type="button" id="tab-orig-phone" class="btn btn-sm" style="flex: 1; font-weight: 600; background: transparent; color: var(--text-main);" onclick="selectOriginateMode('phone')">
+            📱 Celular / Tronco
+          </button>
+        </div>
+
+        <div class="form-group" id="group-orig-to">
           <label>Destino SIP / Telefone (To)</label>
-          <input type="text" id="orig-to" value="" placeholder="ex: 11999998888 ou 1000">
+          <input type="text" id="orig-to" value="*99" placeholder="ex: *99, 11999998888 ou 1000">
           <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-xs" onclick="selectOriginateMode('echo')">Echo Test (*99)</button>
+            <button type="button" class="btn btn-xs" onclick="selectOriginateMode('phone')">Digitar Celular</button>
             <button type="button" class="btn btn-xs" onclick="document.getElementById('orig-to').value='1000'">Ramal 1000</button>
-            <button type="button" class="btn btn-xs" onclick="document.getElementById('orig-to').value='*99'">Echo Test (*99)</button>
           </div>
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
-            Digite seu <strong>número celular com DDD</strong> (ex: <code>11999998888</code>) para receber a ligação real via Directcall, ou um <strong>ramal registrado</strong> (ex: <code>1000</code>).<br>
-            <span style="color: var(--primary);">Nota: Não disque 9000 aqui. O ramal 9000 é o número de entrada da IA.</span>
+          <div id="orig-to-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
+            <strong>Modo Echo Test (*99) selecionado:</strong> Teste acústico local direto no FreeSWITCH (sem custo de operadora). Testa áudio da IA, microfone, transcrição Whisper e detecção de voz em tempo real.
           </div>
         </div>
         <div class="form-group">
@@ -5010,6 +5020,35 @@
     }
 
     // Modal Originate
+    function selectOriginateMode(mode) {
+      const tabEcho = document.getElementById('tab-orig-echo');
+      const tabPhone = document.getElementById('tab-orig-phone');
+      const inputTo = document.getElementById('orig-to');
+      const hint = document.getElementById('orig-to-hint');
+      const errBox = document.getElementById('orig-error-box');
+      if (errBox) errBox.style.display = 'none';
+
+      if (mode === 'echo') {
+        if (tabEcho) { tabEcho.style.background = 'var(--primary)'; tabEcho.style.color = '#fff'; }
+        if (tabPhone) { tabPhone.style.background = 'transparent'; tabPhone.style.color = 'var(--text-main)'; }
+        if (inputTo) inputTo.value = '*99';
+        if (hint) {
+          hint.innerHTML = '<strong>Modo Echo Test (*99) selecionado:</strong> Teste acústico local direto no FreeSWITCH (sem custo de operadora). Testa áudio da IA, microfone, transcrição Whisper e detecção de voz em tempo real.';
+        }
+      } else {
+        if (tabEcho) { tabEcho.style.background = 'transparent'; tabEcho.style.color = 'var(--text-main)'; }
+        if (tabPhone) { tabPhone.style.background = 'var(--primary)'; tabPhone.style.color = '#fff'; }
+        if (inputTo) {
+          if (inputTo.value === '*99') inputTo.value = '';
+          inputTo.placeholder = 'ex: 11999998888';
+          inputTo.focus();
+        }
+        if (hint) {
+          hint.innerHTML = 'Digite seu <strong>número celular com DDD</strong> (ex: <code>11999998888</code>) para receber a ligação real via Directcall. <span style="color:var(--text-muted);">(Requer senha configurada no tronco SIP).</span>';
+        }
+      }
+    }
+
     function openOriginateModal() {
       fetchTenantsData(); // Para garantir dropdown atualizado
       const errBox = document.getElementById('orig-error-box');
@@ -5021,6 +5060,7 @@
         btnSubmit.innerHTML = '<span>📞</span> <span>Chamada de Teste</span>';
       }
       if (btnCancel) btnCancel.disabled = false;
+      selectOriginateMode('echo');
       openModal('modal-originate');
     }
 
@@ -5095,6 +5135,8 @@
             explanation = 'Destino Não Encontrado (SIP 404). Verifique o número ou ramal digitado.';
           } else if (rawMsg.includes('484')) {
             explanation = 'Destino Incompleto (SIP 484). Verifique se o número possui DDD (ex: 11999998888) ou utilize *99 para teste de eco.';
+          } else if (rawMsg.includes('500')) {
+            explanation = 'Erro no Tronco SIP (SIP 500 Server Internal Error). A operadora DirectCall rejeitou a chamada externa. Isso acontece quando o tronco SIP exige a senha da conta DirectCall (WTVNM) ou liberação de IP no portal da operadora. Dica: Para validar o áudio, IA e transcrição imediatamente sem custo, selecione a aba "Teste de Eco (*99)".';
           }
 
           showToast(`Erro ao originar: ${rawMsg}`, 'error');
