@@ -1887,12 +1887,14 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
 
     const cleanTo = to.replace(/\D/g, '');
     const cleanFrom = from.replace(/\D/g, '');
+    const isSpecialDest = to.startsWith('*') || to.toLowerCase() === 'echo' || to.toLowerCase() === 'test';
+    const effectiveTo = isSpecialDest ? to : (cleanTo || to);
 
     // Normalização de BINA: se o destino for telefone público (>= 10 dígitos) e o From for ramal interno (< 10 dígitos),
     // usa a BINA homologada na operadora (5511989785888) para evitar rejeição "603 Decline"
     if (cleanTo.length >= 10 && cleanFrom.length < 10) {
       from = params.callerId || '5511989785888';
-      console.log(`[Originate] 🛡️ BINA normalizada para operadora: From=${from} (era ${cleanFrom}) para destino público To=${to}`);
+      console.log(`[Originate] 🛡️ BINA normalizada para operadora: From=${from} (era ${cleanFrom}) para destino público To=${effectiveTo}`);
     }
 
     const detectedLine = cleanTo.length >= 10 ? 'trunk_sip' : 'softphone';
@@ -1902,7 +1904,7 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
     };
 
     const { endpoint: fsEndpoint, dialog: uacDialog, fsNode, releaseNodeSlot: rSlot } = await fsPool.originateCall(srf, {
-      to,
+      to: effectiveTo,
       from,
       headers: customHeaders
     });
