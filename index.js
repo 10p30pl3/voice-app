@@ -1,4 +1,5 @@
 require('dotenv').config({ override: true });
+const { DEFAULT_CALLER_ID, SIP_HOST, requireCallerId } = require('./utils/env-defaults');
 // Voice App - High-Scalability Multi-Tenant & Multi-FreeSWITCH Voice Gateway
 
 const originalLog = console.log;
@@ -40,6 +41,7 @@ const { createApiRouter } = require('./utils/api-router');
 const aiProviderManager = require('./utils/ai-provider-manager');
 const ElevenLabsS2SBridge = require('./media/elevenlabs-s2s-bridge');
 const { sendVollPlanWebhook } = require('./utils/voll-webhook');
+const { buildConnectorEvent } = require('./utils/voll-contract');
 
 function createAiBridge(tenant, sipHeaders) {
   const engine = (tenant?.stsEngine || 'openai').toLowerCase();
@@ -296,8 +298,8 @@ class OpenAIS2SBridge {
     if (this.isSafetyExpiring) return false;
     if (this.isGreetingInProgress || this.isMicMutedByGrace) return false;
     if (this.isBargeinGraceActive()) return false;
-    // Carência mínima de 450ms após o início do áudio do agente para evitar falso corte pelo eco/cauda do usuário
-    if (this.agentPlaybackStartTime && Date.now() - this.agentPlaybackStartTime < 450) {
+    // Carência mínima de 700ms após o início do áudio do agente para evitar falso corte pelo eco transatlântico
+    if (this.agentPlaybackStartTime && Date.now() - this.agentPlaybackStartTime < 700) {
       return false;
     }
     return true;
@@ -648,10 +650,11 @@ class OpenAIS2SBridge {
           const elapsedPlaybackMs = this.greetingPlaybackStartTime
             ? Date.now() - this.greetingPlaybackStartTime
             : 0;
-          const remainingMs = Math.max(0, audioDurationMs - elapsedPlaybackMs) + 350;
+          const maxGraceMs = Math.max(800, Math.round((this.bargeinGraceSec || 1.0) * 1000));
+          const remainingMs = Math.min(Math.max(0, audioDurationMs - elapsedPlaybackMs) + 200, maxGraceMs);
 
           console.log(
-            `[${this.callId}] ⏳ [BARGE-IN DINÂMICO] Saudação da IA transmitida (${(audioDurationMs / 1000).toFixed(1)}s de áudio). Aguardando término da reprodução (${remainingMs}ms) para abrir o canal.`
+            `[${this.callId}] ⏳ [BARGE-IN DINÂMICO] Saudação da IA transmitida (${(audioDurationMs / 1000).toFixed(1)}s de áudio). Aguardando carência (${remainingMs}ms) para abrir o canal.`
           );
 
           this.greetingFinishTimer = setTimeout(async () => {
@@ -834,7 +837,7 @@ class OpenAIS2SBridge {
       );
 
       // Timeout de segurança dinâmico para garantir abertura rápida do canal caso haja lentidão na IA
-      const safetyGraceMs = Math.max(8000, (this.bargeinGraceSec || 8) * 1000);
+      const safetyGraceMs = Math.max(8000, Math.round((this.bargeinGraceSec || 8) * 1000));
       this.greetingSafetyTimer = setTimeout(() => {
         if (this.isGreetingInProgress && !this.isTerminated) {
           if (this.greetingAudioBytes > 0 && this.greetingFinishTimer) {
@@ -978,7 +981,10 @@ class OpenAIS2SBridge {
     }
 
     this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation false`);
-    this.safeApi(`uuid_setvar ${this.channelUuid} noise_suppression true`);
+    // Desativa supressao Speex no FreeSWITCH para evitar voz metalica/abafada em G.711/PCM
+    this.safeApi(`uuid_setvar ${this.channelUuid} noise_suppression false`);
+    // Ajuste de ganho de entrada (-3dB) para evitar saturação analógica/clipping digital (pico > 32000)
+    this.safeApi(`uuid_setvar ${this.channelUuid} rtp_audio_in_level -3`);
 
     let vadThreshold = 0.45;
     let prefixPaddingMs = 160;
@@ -1176,10 +1182,11 @@ class OpenAIS2SBridge {
 
       this.isToneProbe = true;
       if (this.endpoint && typeof this.endpoint.play === 'function') {
-        this.endpoint.play('tone_stream://v=0;%(700,0,425)').catch(() => {});
+        // Sonda suave (-16dB) para calibracao sem saturar ou estourar no ouvido do cliente
+        this.endpoint.play('tone_stream://v=-16;%(500,0,425)').catch(() => {});
       }
       const startSamples = this.energyManager.echoSamplesCount;
-      await wait(700);
+      await wait(500);
       if (this.isTerminated || !this.endpoint) return;
 
       this.isToneProbe = false;
@@ -1194,11 +1201,11 @@ class OpenAIS2SBridge {
       // Desliga o cálculo de energia após travar o perfil do Sonar (economia de ~30% de CPU por chamada)
       this.calibrationActive = false;
 
-      if (this.deviceMode === 'viva_voz') {
-        console.log(`[${this.callId}] 🛡️ Ativando AEC para proteção de Viva-voz.`);
+      if (this.deviceMode === 'viva_voz' && this.lineType === 'softphone') {
+        console.log(`[${this.callId}] 🛡️ Ativando AEC para proteção de Viva-voz em Softphone.`);
         this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation true`);
       } else {
-        console.log(`[${this.callId}] 🎧 Mantendo AEC desligado para máxima fluidez no Fone.`);
+        console.log(`[${this.callId}] 🎧 Mantendo AEC desligado (modo fone ou tronco celular com AEC nativo de hardware).`);
         this.safeApi(`uuid_setvar ${this.channelUuid} echo_cancellation false`);
       }
 
@@ -1450,6 +1457,7 @@ class OpenAIS2SBridge {
     const targetMode = String(newMode || '').toLowerCase();
     if (!['atual', 'dsp', 'wespeaker', 'ecapa', 'none'].includes(targetMode)) return;
     if (this.crosstalkMode === targetMode) return;
+    if ((targetMode === 'ecapa' || targetMode === 'wespeaker') && whisperPool && typeof whisperPool.getStats === 'function' && whisperPool.getStats().healthyNodes === 0) return;
 
     const prevMode = this.crosstalkMode;
     this.crosstalkMode = targetMode;
@@ -1875,7 +1883,7 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
   };
 
   try {
-    let from = (params.from && params.from.trim()) ? params.from.trim() : (params.callerId || '5511989785888');
+    let from = requireCallerId(params.from, params.callerId);
     let to = params.to ? String(params.to).trim() : '';
     if (to.startsWith('+')) {
       to = to.substring(1);
@@ -1893,7 +1901,7 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
     // Normalização de BINA: se o destino for telefone público (>= 10 dígitos) e o From for ramal interno (< 10 dígitos),
     // usa a BINA homologada na operadora (5511989785888) para evitar rejeição "603 Decline"
     if (cleanTo.length >= 10 && cleanFrom.length < 10) {
-      from = params.callerId || '5511989785888';
+      from = requireCallerId(params.callerId);
       console.log(`[Originate] 🛡️ BINA normalizada para operadora: From=${from} (era ${cleanFrom}) para destino público To=${effectiveTo}`);
     }
 
@@ -2039,18 +2047,15 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
           }
 
           if (params.callback && params.callback.url) {
-            sendVollPlanWebhook(params.callback, {
-              eventId: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            sendVollPlanWebhook(params.callback, buildConnectorEvent({
               attemptId: params.attemptId,
               providerAttemptId: params.providerAttemptId || callId,
-              type: 'RESULT',
-              occurredAt: new Date().toISOString(),
               tabulationCode,
               scheduledAt,
               summary,
-              durationSeconds: Math.round(callInfo ? callInfo.durationSec : 0),
-              cost: aiUsage ? aiUsage.costUsd : undefined
-            }).catch((whErr) => console.warn(`[${callId}] Falha ao despachar webhook para Voll Plan:`, whErr.message));
+              durationSeconds: callInfo ? callInfo.durationSec : 0,
+              aiCostUsd: aiUsage ? aiUsage.costUsd : undefined
+            })).catch((whErr) => console.warn(`[${callId}] Falha ao despachar webhook para Voll Plan:`, whErr.message));
           }
         }
       } catch (logErr) {
@@ -2117,7 +2122,7 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
           callId: (dialog && dialog.sip?.callId) || `fail-${Date.now()}`,
           direction: 'outbound',
           tenantId: tenant?.id || 'default',
-          caller: params.from || '5511989785888',
+          caller: params.from || params.callerId || DEFAULT_CALLER_ID || null,
           called: params.to || '1000',
           durationSec: 0,
           costUsd: 0,
@@ -2144,16 +2149,13 @@ Sempre utilize a ferramenta "registrar_desfecho_chamada" ao identificar o desfec
       } else if (msg.includes('480') || msg.includes('timeout') || msg.includes('temporarily')) {
         tabCode = 'NO_ANSWER';
       }
-      sendVollPlanWebhook(params.callback, {
-        eventId: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      sendVollPlanWebhook(params.callback, buildConnectorEvent({
         attemptId: params.attemptId,
-        providerAttemptId: params.providerAttemptId || (dialog && dialog.sip?.callId) || `fail-${Date.now()}`,
-        type: 'RESULT',
-        occurredAt: new Date().toISOString(),
+        providerAttemptId: params.providerAttemptId || (dialog && dialog.sip?.callId) || `fail-${params.attemptId || Date.now()}`,
         tabulationCode: tabCode,
         durationSeconds: 0,
         summary: `Falha na originação SIP: ${err.message || 'originate_failed'}`
-      }).catch((whErr) => console.warn('Falha ao despachar webhook de erro para Voll Plan:', whErr.message));
+      })).catch((whErr) => console.warn('Falha ao despachar webhook de erro para Voll Plan:', whErr.message));
     }
     throw err;
   }
@@ -2218,7 +2220,7 @@ srf.register(async (req, res) => {
   const user = req.get('From') || req.uri;
   console.log(`[SIP Register] Recebido REGISTER na porta 5060 para ${user}, repassando para FreeSWITCH 5080...`);
   try {
-    const fsTarget = `sip:${process.env.SIP_INTERNAL_HOST || process.env.DRACHTIO_EXTERNAL_IP || process.env.SERVER_IP || '127.0.0.1'}:5080`;
+    const fsTarget = `sip:${SIP_HOST}:5080`;
     await srf.proxyRequest(req, fsTarget);
   } catch (err) {
     console.error('[SIP Register Proxy] Erro ao repassar registro:', err.message);
@@ -2235,13 +2237,31 @@ srf.invite(async (req, res) => {
   }
 
   const callId = getCallId(req);
+  const srcIp = req.source_address || req.source?.address || '';
+  const isInternal = srcIp === '127.0.0.1' || srcIp === 'localhost' || srcIp.startsWith('172.') || srcIp.startsWith('10.') || srcIp === (process.env.SIP_INTERNAL_HOST || process.env.SERVER_IP || '194.163.151.91');
+  const called = req.calledNumber || tenantManager.extractCalledNumber(req) || '';
+  const cleanCalled = String(called).trim();
+  const isAiExt = /^(9\d{3}|\*1000|ia|9000|9001|9002)$/.test(cleanCalled);
+  const isEcho = /^(\*?99|echo|test)$/i.test(cleanCalled);
+
   const inboundTrunkId = trunkManager.identifyTrunk(req);
+
+  // 🛡️ [SIP FIREWALL] Proteção contra scanners públicos da internet
+  // Se o IP não for de um tronco cadastrado (ex: DirectCall) e não for tráfego interno do FreeSWITCH/Docker:
+  if (!inboundTrunkId && !isInternal) {
+    const { rule } = routeManager.match({ did: cleanCalled, callerId: req.callingNumber || '', trunkId: null });
+    if (!rule && !isAiExt && !isEcho) {
+      console.warn(`[${callId}] 🛡️ [SIP FIREWALL] Bloqueio de scanner externo: IP=${srcIp} tentou chamar destino não autorizado=${cleanCalled}`);
+      return res.send(403);
+    }
+  }
+
   const routed = routeManager.resolveRoute(req, tenantManager, inboundTrunkId);
   const tenant = routed.tenant;
   const routeRule = routed.rule;
 
   if (!tenant || !tenant.active) {
-    console.warn(`[${callId}] Chamada rejeitada: Tenant inativo ou não cadastrado.`);
+    console.warn(`[${callId}] 🛡️ Chamada rejeitada: destino "${cleanCalled}" não autorizado ou tenant inativo (de ${srcIp || 'desconhecido'}).`);
     return res.send(404);
   }
 

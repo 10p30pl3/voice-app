@@ -282,10 +282,31 @@ async def audio_stream_endpoint(
             elif "text" in data and data["text"]:
                 try:
                     payload = json.loads(data["text"])
-                    if payload.get("type") == "stop":
+                    cmd_type = payload.get("type")
+                    if cmd_type == "stop":
                         break
-                except Exception:
-                    pass
+                    elif cmd_type == "set_spk_filter":
+                        new_filter = (payload.get("spk_filter") or "none").lower()
+                        new_threshold = payload.get("spk_threshold")
+                        if new_threshold is None and new_filter in ["wespeaker", "ecapa"]:
+                            new_threshold = DEFAULT_THRESHOLDS[model_key_of(new_filter)]
+                        
+                        spk_filter = new_filter
+                        is_spk_active = spk_filter in ["wespeaker", "ecapa"]
+                        if is_spk_active:
+                            spk_stream = SpeakerStream(call_id, spk_filter, new_threshold, sample_rate=8000)
+                            print(f"[WS] [{call_id}] 🔀 Biometria vocal alterada dinamicamente para {spk_filter.upper()} (limiar={new_threshold})")
+                            await websocket.send_text(json.dumps({
+                                "type": "speaker_filter_updated",
+                                "call_id": call_id,
+                                "spk_filter": spk_filter,
+                                "threshold": new_threshold
+                            }))
+                        else:
+                            spk_stream = None
+                            print(f"[WS] [{call_id}] 🔀 Biometria vocal desativada.")
+                except Exception as e:
+                    print(f"[WS] [{call_id}] Erro no processamento de comando texto: {e}")
 
     except WebSocketDisconnect:
         pass

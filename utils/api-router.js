@@ -1,3 +1,6 @@
+const { requireCallerId } = require('./env-defaults');
+const { validateCallRequest, validateAgentTenant, checkOrderAgainstTenant, redactTenant } = require('./voll-contract');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
@@ -222,6 +225,14 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
   const defaultRecDir = process.env.RECORDING_DIR || path.join(__dirname, '..', 'recordings');
   const dashboardHtmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
   let lastDiagnosticsResult = null;
+  const RECORDINGS_CACHE_TTL_MS = 5000;
+  let recordingsCache = { builtAt: 0, items: [] };
+  const invalidateRecordingsCache = () => {
+    recordingsCache = { builtAt: 0, items: [] };
+  };
+  if (callHistoryManager && typeof callHistoryManager.on === 'function') {
+    callHistoryManager.on('call_end', invalidateRecordingsCache);
+  }
 
   function getVoiceFeaturesStatus() {
     const tenant = tenantManager ? tenantManager.getDefaultTenant() : {};
@@ -560,7 +571,12 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       const authHeader = req.headers['authorization'] || '';
       const apiKeyHeader = req.headers['x-api-key'] || '';
       const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
-      if (bearerToken !== configuredToken && apiKeyHeader !== configuredToken) {
+      const timingMatch = (a, b) => {
+        const ha = crypto.createHash('sha256').update(String(a || '')).digest();
+        const hb = crypto.createHash('sha256').update(String(b || '')).digest();
+        return crypto.timingSafeEqual(ha, hb);
+      };
+      if (!timingMatch(bearerToken, configuredToken) && !timingMatch(apiKeyHeader, configuredToken)) {
         sendJson(res, 401, {
           error: 'unauthorized',
           message: 'Token de API inválido ou ausente (use Authorization: Bearer <token> ou X-API-Key)'
@@ -844,6 +860,25 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
         return true;
       }
 
+      // Ordem vinda do Voll Plan: valida o contrato compartilhado (packages/shared/contracts)
+      if (body.attemptId) {
+        const check = validateCallRequest(body);
+        if (!check.ok) {
+          sendJson(res, 400, { error: 'invalid_call_request', message: 'Ordem fora do contrato Voll Plan', details: check.errors });
+          return true;
+        }
+        const headerKey = req.headers['idempotency-key'];
+        if (headerKey && headerKey !== body.attemptId) {
+          sendJson(res, 409, { error: 'idempotency_conflict', message: 'Idempotency-Key diferente de attemptId' });
+          return true;
+        }
+        const refusal = checkOrderAgainstTenant(body, tenantManager ? tenantManager.tenants.get(body.tenantId) : null);
+        if (refusal) {
+          sendJson(res, refusal.status, { error: refusal.error, message: refusal.message });
+          return true;
+        }
+      }
+
       // Validação rápida de capacidade do cluster FreeSWITCH
       if (fsPool && typeof fsPool.hasHealthyNode === 'function' && !fsPool.hasHealthyNode()) {
         sendJson(res, 429, { error: 'capacity_exceeded', message: 'Nenhum nó de telefonia saudável no cluster FreeSWITCH' });
@@ -906,7 +941,8 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
     if (callMatch) {
       const callId = decodeURIComponent(callMatch[1]);
       const action = callMatch[2] || null;
-      const bridge = activeBridges.get(callId);
+      // aceita o id da chamada SIP, o providerAttemptId (va-<attemptId>) ou o próprio attemptId do Voll Plan
+      const bridge = resolveBridge(activeBridges, callId);
 
       if (!bridge) {
         if ((req.method === 'DELETE' && !action) || (req.method === 'POST' && action === 'hangup')) {
@@ -1067,39 +1103,51 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
     // -----------------------------------------------------------------------
     if (req.method === 'GET' && cleanPath === '/v1/recordings') {
       const tenantFilter = parsedUrl.searchParams.get('tenantId');
-      const items = [];
+      const tenantIdsRaw = parsedUrl.searchParams.get('tenantIds');
+      const tenantIds = tenantIdsRaw
+        ? tenantIdsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+        : tenantFilter
+        ? [tenantFilter]
+        : null;
 
-      if (fs.existsSync(defaultRecDir)) {
-        const files = await fs.promises.readdir(defaultRecDir);
-        const wavFiles = files.filter((f) => f.endsWith('.wav')).sort().reverse();
+      const now = Date.now();
+      if (now - recordingsCache.builtAt >= RECORDINGS_CACHE_TTL_MS) {
+        const freshItems = [];
+        if (fs.existsSync(defaultRecDir)) {
+          const files = await fs.promises.readdir(defaultRecDir);
+          const fileSet = new Set(files);
+          const wavFiles = files.filter((f) => f.endsWith('.wav')).sort().reverse();
 
-        for (const wavFile of wavFiles) {
-          const baseName = wavFile.slice(0, -4);
-          if (tenantFilter && !baseName.includes(`_${tenantFilter}_`)) continue;
+          for (const wavFile of wavFiles) {
+            const baseName = wavFile.slice(0, -4);
+            const wavPath = path.join(defaultRecDir, wavFile);
+            let stat = null;
+            try {
+              stat = await fs.promises.stat(wavPath);
+            } catch {
+              continue;
+            }
+            const hasTranscript = fileSet.has(`${baseName}.txt`);
 
-          const wavPath = path.join(defaultRecDir, wavFile);
-          const txtPath = path.join(defaultRecDir, `${baseName}.txt`);
-          let stat = null;
-          try {
-            stat = await fs.promises.stat(wavPath);
-          } catch {
-            continue;
+            freshItems.push({
+              id: baseName,
+              audioFile: wavFile,
+              transcriptFile: hasTranscript ? `${baseName}.txt` : null,
+              sizeBytes: stat.size,
+              createdAt: stat.birthtime || stat.mtime,
+              audioUrl: `/v1/recordings/${encodeURIComponent(baseName)}/audio`,
+              transcriptUrl: hasTranscript ? `/v1/recordings/${encodeURIComponent(baseName)}/transcript` : null
+            });
           }
-          const hasTranscript = fs.existsSync(txtPath);
-
-          items.push({
-            id: baseName,
-            audioFile: wavFile,
-            transcriptFile: hasTranscript ? `${baseName}.txt` : null,
-            sizeBytes: stat.size,
-            createdAt: stat.birthtime || stat.mtime,
-            audioUrl: `/v1/recordings/${encodeURIComponent(baseName)}/audio`,
-            transcriptUrl: hasTranscript ? `/v1/recordings/${encodeURIComponent(baseName)}/transcript` : null
-          });
         }
+        recordingsCache = { builtAt: now, items: freshItems };
       }
 
-      sendJson(res, 200, { count: items.length, recordings: items });
+      const items = tenantIds
+        ? recordingsCache.items.filter((it) => tenantIds.some((tid) => it.id.includes(`_${tid}_`) || it.id.startsWith(`${tid}_`)))
+        : recordingsCache.items;
+
+      sendJson(res, 200, { count: items.length, recordings: items, cached: now === recordingsCache.builtAt ? false : true });
       return true;
     }
 
@@ -1151,6 +1199,7 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
         }
       }
 
+      if (deleted.length > 0) invalidateRecordingsCache();
       sendJson(res, 200, {
         ok: true,
         deletedCount: deleted.length,
@@ -1186,6 +1235,7 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
           sendJson(res, 404, { error: 'recording_not_found', message: `Gravação não encontrada: ${safeBase}` });
           return true;
         }
+        invalidateRecordingsCache();
         sendJson(res, 200, { ok: true, deleted: safeBase });
         return true;
       }
@@ -1196,9 +1246,31 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
           return true;
         }
         const stat = await fs.promises.stat(wavPath);
+        const total = stat.size;
+        const range = req.headers.range;
+        if (range && /^bytes=\d*-\d*$/.test(String(range).trim())) {
+          const [startStr, endStr] = String(range).replace(/^bytes=/, '').split('-');
+          const start = startStr ? parseInt(startStr, 10) : 0;
+          const end = endStr ? Math.min(parseInt(endStr, 10), total - 1) : total - 1;
+          if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= total) {
+            res.writeHead(416, { 'Content-Range': `bytes */${total}` });
+            res.end();
+            return true;
+          }
+          res.writeHead(206, {
+            'Content-Type': 'audio/wav',
+            'Content-Range': `bytes ${start}-${end}/${total}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': end - start + 1,
+            'Content-Disposition': `inline; filename="${safeBase}.wav"`
+          });
+          fs.createReadStream(wavPath, { start, end }).pipe(res);
+          return true;
+        }
         res.writeHead(200, {
           'Content-Type': 'audio/wav',
-          'Content-Length': stat.size,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': total,
           'Content-Disposition': `inline; filename="${safeBase}.wav"`
         });
         fs.createReadStream(wavPath).pipe(res);
@@ -1301,8 +1373,15 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
 
     if (req.method === 'POST' && cleanPath === '/v1/tenants') {
       try {
+        if (body && body.vollAgentVersion != null) {
+          const check = validateAgentTenant(body);
+          if (!check.ok) {
+            sendJson(res, 400, { error: 'invalid_agent', message: 'Agente fora do contrato Voll Plan', details: check.errors });
+            return true;
+          }
+        }
         const saved = tenantManager.upsertTenant(body);
-        sendJson(res, 201, { ok: true, tenant: saved });
+        sendJson(res, 201, { ok: true, tenant: redactTenant(saved) });
       } catch (err) {
         sendJson(res, 400, { error: 'validation_error', message: err.message });
       }
@@ -1319,14 +1398,27 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
           sendJson(res, 404, { error: 'tenant_not_found', message: `Tenant não encontrado: ${tenantId}` });
           return true;
         }
-        sendJson(res, 200, t);
+        sendJson(res, 200, redactTenant(t));
         return true;
       }
 
       if (req.method === 'PUT') {
         try {
+          if (body && body.vollAgentVersion != null) {
+            // agente gerenciado pelo Voll Plan: contrato estrito e nenhuma credencial vinda de fora
+            const check = validateAgentTenant({ ...body, id: tenantId });
+            if (!check.ok) {
+              sendJson(res, 400, { error: 'invalid_agent', message: 'Agente fora do contrato Voll Plan', details: check.errors });
+              return true;
+            }
+            const previous = tenantManager.tenants.get(tenantId);
+            if (previous && previous.vollAgentVersion != null && previous.vollAgentVersion > body.vollAgentVersion) {
+              sendJson(res, 409, { error: 'stale_agent_version', message: `Gateway já tem a versão ${previous.vollAgentVersion}` });
+              return true;
+            }
+          }
           const saved = tenantManager.upsertTenant({ ...body, id: tenantId });
-          sendJson(res, 200, { ok: true, tenant: saved });
+          sendJson(res, 200, { ok: true, tenant: redactTenant(saved) });
         } catch (err) {
           sendJson(res, 400, { error: 'validation_error', message: err.message });
         }
@@ -1410,6 +1502,20 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       sendJson(res, 200, {
         statement: tracker.getStatements({ provider, tenantId, limit }),
         summary: tracker.getCostSummary()
+      });
+      return true;
+    }
+
+    // Disparos e provedores SMS/WhatsApp legados: substituídos pelo motor de campanhas e pelos conectores do
+    // Voll Plan (DNC, limites, idempotência). Leitura continua disponível para consultar o histórico.
+    if (
+      process.env.LEGACY_OUTREACH_ENABLED !== 'true' &&
+      req.method !== 'GET' &&
+      (cleanPath.startsWith('/v1/outreach') || cleanPath.startsWith('/v1/providers'))
+    ) {
+      sendJson(res, 410, {
+        error: 'moved_to_voll_plan',
+        message: 'Disparos e provedores SMS/WhatsApp agora são feitos por campanhas e conexões no Voll Plan. Defina LEGACY_OUTREACH_ENABLED=true para reativar temporariamente.'
       });
       return true;
     }
@@ -1543,7 +1649,7 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
           }
           const trunkId = sim.matchedRule && sim.matchedRule.trunkId !== '*' ? sim.matchedRule.trunkId : null;
           if (!fromDid) {
-            fromDid = '5511989785888';
+            fromDid = requireCallerId();
           }
           try {
             const call = await originateCallHandler({
@@ -1756,3 +1862,14 @@ module.exports = {
   createApiRouter,
   API_COMMANDS_CATALOG
 };
+
+/** Localiza a chamada ativa pelo id SIP, pelo providerAttemptId ou pelo attemptId do Voll Plan. */
+function resolveBridge(activeBridges, id) {
+  if (!activeBridges || !id) return null;
+  const direct = activeBridges.get(id);
+  if (direct) return direct;
+  for (const b of activeBridges.values()) {
+    if (b && (b.attemptId === id || b.providerAttemptId === id || `va-${b.attemptId}` === id)) return b;
+  }
+  return null;
+}

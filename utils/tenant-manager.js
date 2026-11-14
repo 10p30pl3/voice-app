@@ -294,7 +294,12 @@ class TenantManager {
       }
     }
 
-    return defaultTenant;
+    // Apenas retorna defaultTenant se a chamada for para o ramal da IA ou interna sem número especificado
+    if (!calledNumber || /^(9\d{3}|\*1000|ia|9000|9001|9002)$/.test(String(calledNumber).trim())) {
+      return defaultTenant;
+    }
+
+    return null;
   }
 
   /**
@@ -355,14 +360,13 @@ class TenantManager {
   }
 
   listTenants() {
+    const maskKey = (k) => (k ? `${String(k).slice(0, 7)}...${String(k).slice(-4)}` : null);
     const result = [];
     for (const [id, t] of this.tenants.entries()) {
-      const maskedKey = t.openaiApiKey
-        ? `${t.openaiApiKey.slice(0, 7)}...${t.openaiApiKey.slice(-4)}`
-        : null;
       result.push({
         ...t,
-        openaiApiKey: maskedKey,
+        openaiApiKey: maskKey(t.openaiApiKey),
+        elevenlabsApiKey: maskKey(t.elevenlabsApiKey),
         activeCalls: this.activeCallsPerTenant.get(id) || 0
       });
     }
@@ -375,10 +379,18 @@ class TenantManager {
     }
     const defaultTenant = this.getDefaultTenant();
     const existing = this.tenants.get(data.id) || defaultTenant;
+    const isMasked = (val) => typeof val === 'string' && val.includes('...');
+    const sanitizedData = { ...data };
+    if (isMasked(sanitizedData.openaiApiKey)) {
+      sanitizedData.openaiApiKey = existing.openaiApiKey;
+    }
+    if (isMasked(sanitizedData.elevenlabsApiKey)) {
+      sanitizedData.elevenlabsApiKey = existing.elevenlabsApiKey;
+    }
     const merged = {
       ...defaultTenant,
       ...existing,
-      ...data,
+      ...sanitizedData,
       extension: data.extension !== undefined
         ? (String(data.extension || '').trim() || null)
         : (existing.extension || (data.id === 'default' ? '9000' : null)),

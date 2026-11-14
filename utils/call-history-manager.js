@@ -67,11 +67,16 @@ class CallHistoryManager extends EventEmitter {
 
       const activeEntry = {
         callId: callData.callId,
+        sipCallId: callData.sipCallId || callData.callId,
         channelUuid: callData.channelUuid || null,
         direction: callData.direction || (callData.isOutbound ? 'outbound' : 'inbound'),
         tenantId: callData.tenantId || 'default',
         caller: callData.caller || 'Desc',
         called: callData.called || '1000',
+        remoteAddress: callData.remoteAddress || null,
+        userAgent: callData.userAgent || null,
+        fsNodeId: callData.fsNodeId || null,
+        stsEngine: callData.stsEngine || (callData.tenantId === 'eleven1' ? 'elevenlabs' : 'openai'),
         startedAt,
         startedAtFormatted,
         endedAt: null,
@@ -89,7 +94,8 @@ class CallHistoryManager extends EventEmitter {
         sttEnabled: Boolean(callData.sttEnabled),
         transcriptTurnsCount: 0,
         isActive: true,
-        transcript: []
+        transcript: [],
+        telephonyLogs: Array.isArray(callData.telephonyLogs) ? callData.telephonyLogs : []
       };
 
       this.activeCalls.set(callData.callId, activeEntry);
@@ -129,6 +135,24 @@ class CallHistoryManager extends EventEmitter {
     }
   }
 
+  addTelephonyLog(callId, logEntry) {
+    if (!callId || !logEntry) return;
+    try {
+      const active = this.activeCalls.get(callId);
+      if (active) {
+        if (!Array.isArray(active.telephonyLogs)) active.telephonyLogs = [];
+        const entry = {
+          timestamp: logEntry.timestamp || new Date().toISOString(),
+          type: logEntry.type || 'INFO',
+          message: logEntry.message || String(logEntry),
+          details: logEntry.details || null
+        };
+        active.telephonyLogs.push(entry);
+        this.emit('telephony_log', { callId, log: entry });
+      }
+    } catch {}
+  }
+
   recordCallEnd(callData) {
     try {
       this._ensureDir();
@@ -156,11 +180,16 @@ class CallHistoryManager extends EventEmitter {
 
       const logEntry = {
         callId: callData.callId,
+        sipCallId: callData.sipCallId || existingActive?.sipCallId || callData.callId,
         channelUuid: callData.channelUuid || existingActive?.channelUuid || null,
         direction: callData.direction || (callData.isOutbound ? 'outbound' : 'inbound'),
         tenantId: callData.tenantId || existingActive?.tenantId || 'default',
         caller: callData.caller || existingActive?.caller || 'Desc',
         called: callData.called || existingActive?.called || '1000',
+        remoteAddress: callData.remoteAddress || existingActive?.remoteAddress || null,
+        userAgent: callData.userAgent || existingActive?.userAgent || null,
+        fsNodeId: callData.fsNodeId || existingActive?.fsNodeId || null,
+        stsEngine: callData.stsEngine || existingActive?.stsEngine || (callData.tenantId === 'eleven1' ? 'elevenlabs' : 'openai'),
         startedAt: startedAt || endedAt,
         endedAt,
         endedAtFormatted,
@@ -179,6 +208,9 @@ class CallHistoryManager extends EventEmitter {
         recordingFile: callData.recordingFile || null,
         transcriptFile: callData.transcriptFile || null,
         transcript: Array.isArray(callData.transcript) ? callData.transcript : (existingActive?.transcript || []),
+        telephonyLogs: Array.isArray(callData.telephonyLogs) && callData.telephonyLogs.length > 0
+          ? callData.telephonyLogs
+          : (existingActive?.telephonyLogs || []),
         isActive: false
       };
 

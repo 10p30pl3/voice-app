@@ -3,6 +3,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const os = require('os');
 const { URL } = require('url');
+const EventEmitter = require('events');
 
 function getLocalIp() {
   const interfaces = os.networkInterfaces();
@@ -231,8 +232,9 @@ class WsMediaServer {
 
 const mediaServerSingleton = new WsMediaServer();
 
-class WsMediaBridge {
+class WsMediaBridge extends EventEmitter {
   constructor() {
+    super();
     this.socket = null;
     this.callId = null;
     this.onAudio = null;
@@ -404,6 +406,7 @@ class WsMediaBridge {
         this.stopTxPacer(true);
         this.isPlaying = false;
         this.streamEnding = false;
+        this.emit('playback_ended');
       } else if (targetFrames > this.txFramesSent + CUSHION_FRAMES) {
         // Evita acúmulo de déficit caso a IA demore entre pacotes na mesma resposta
         this.txPacerStartTime = now - Math.max(0, this.txFramesSent - 1) * FRAME_MS;
@@ -463,17 +466,23 @@ class WsMediaBridge {
       console.log(`[${this.callId}] 🔇 Playback encerrado (${this.playbackChunkCount} frames enviados)`);
       this.isPlaying = false;
       this.streamEnding = false;
+      this.emit('playback_ended');
     } else {
       console.log(`[${this.callId}] 🔇 Playback encerrado (${this.playbackChunkCount} frames enviados)`);
       this.isPlaying = false;
       this.streamEnding = false;
+      this.emit('playback_ended');
     }
   }
 
   killAudio() {
+    const wasPlaying = this.isPlaying;
     this.isPlaying = false;
     this.streamEnding = false;
     this.stopTxPacer(true);
+    if (wasPlaying) {
+      this.emit('playback_ended');
+    }
     if (this.recorder) {
       this.recorder.clearAiBuffer();
     }
