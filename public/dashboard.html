@@ -2377,7 +2377,16 @@
           <span class="nav-label">Agentes IA</span>
         </button>
 
-        <div class="nav-section-label">TELEFONIA & GESTÃO</div>
+        <div class="nav-section-label">TELEFONIA</div>
+        <button class="nav-item" id="nav-item-extensions" onclick="switchMainSection('extensions')">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+          </svg>
+          <span class="nav-label">Ramais SIP</span>
+          <span class="nav-badge zero" id="badge-nav-extensions">0</span>
+        </button>
+
+        <div class="nav-section-label">GESTÃO & CONFIGURAÇÃO</div>
         <button class="nav-item" id="nav-item-settings" onclick="switchSettingsSubtab('trunks')">
           <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
@@ -2394,7 +2403,7 @@
             </svg>
             <span>TELEFONIA</span>
           </div>
-          <button class="sidebar-subitem" id="subitem-extensions" onclick="switchSettingsSubtab('extensions')">
+          <button class="sidebar-subitem" id="subitem-extensions" onclick="switchMainSection('extensions')">
             <span class="sidebar-subitem-dot"></span>
             <span class="sidebar-subitem-label">Ramais SIP</span>
             <span class="sidebar-subitem-badge" id="badge-extensions-count">11</span>
@@ -2744,7 +2753,142 @@
           </div>
         </section>
 
-        <!-- MÓDULO 4: CONFIGURAÇÕES -->
+        <!-- MÓDULO 4: RAMAIS SIP & TELEFONIA INTERNA -->
+        <section id="sec-extensions" class="main-section">
+          <div class="calls-header">
+            <div class="section-title">
+              <span>Ramais SIP & Telefonia Interna</span>
+              <span style="font-size: 13px; font-weight: normal; color: var(--text-muted);" id="lbl-extensions-summary">Carregando status dos ramais...</span>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button class="btn btn-sm" onclick="loadExtensionsTab()">🔄 Recarregar</button>
+              <button class="btn btn-sm" onclick="syncExtensionsFreeSwitch()" title="Sincroniza os arquivos XML no diretório e recarrega o FreeSWITCH (reloadxml)">🔄 Sincronizar FreeSWITCH</button>
+              <button class="btn btn-sm" onclick="generateExtensionsRange()" title="Garante que todos os ramais de 1000 a 1010 estão criados">⚡ Gerar 1000-1010</button>
+              <button class="btn btn-sm" onclick="openSipConfigModal()">ℹ️ Conexão SIP</button>
+              <button class="btn btn-sm" onclick="openSoftphoneModal()">📱 Softphone de Teste</button>
+              <button class="btn btn-sm btn-primary" onclick="openExtensionModal()">+ Novo Ramal</button>
+            </div>
+          </div>
+
+          <!-- Métricas e KPIs no topo -->
+          <div class="metric-grid" style="margin-bottom: 20px;">
+            <div class="metric-card">
+              <div>
+                <div class="metric-label">Servidor SIP FreeSWITCH</div>
+                <div class="metric-value" style="font-size: 18px; font-family: monospace;" id="ext-kpi-server">192.168.15.36:5080</div>
+                <div style="font-size: 11px; color: var(--text-dim); margin-top: 3px;">Perfil Sofia drachtio_mrf (UDP/TCP)</div>
+              </div>
+              <div class="metric-icon">🌐</div>
+            </div>
+            <div class="metric-card">
+              <div>
+                <div class="metric-label">Ramais Registrados (Online)</div>
+                <div class="metric-value" style="color: var(--success);" id="ext-kpi-online">0</div>
+                <div style="font-size: 11px; color: var(--text-dim); margin-top: 3px;">Softphones conectados ao vivo</div>
+              </div>
+              <div class="metric-icon" style="color: var(--success);">🟢</div>
+            </div>
+            <div class="metric-card">
+              <div>
+                <div class="metric-label">Total de Ramais</div>
+                <div class="metric-value" id="ext-kpi-total">11</div>
+                <div style="font-size: 11px; color: var(--text-dim); margin-top: 3px;" id="ext-kpi-offline">11 offline (aguardando registro)</div>
+              </div>
+              <div class="metric-icon">☎️</div>
+            </div>
+            <div class="metric-card">
+              <div>
+                <div class="metric-label">Agente IA & Teste de Eco</div>
+                <div class="metric-value" style="font-size: 18px; font-family: monospace;">9000 & *99</div>
+                <div style="font-size: 11px; color: var(--text-dim); margin-top: 3px;">9000 = IA Voll Connect • *99 = Eco Loopback</div>
+              </div>
+              <div class="metric-icon">🤖</div>
+            </div>
+          </div>
+
+          <!-- Banner Informativo com Instruções de Telefonia Local e Configuração de Softphone -->
+          <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 14px;">
+                <div style="width: 44px; height: 44px; border-radius: 10px; background: var(--bg-card-hover); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0;">
+                  📞
+                </div>
+                <div>
+                  <div style="font-size: 14px; font-weight: 700; color: var(--text-main);">
+                    Guia Rápido de Conexão SIP (MicroSIP / Zoiper / Linphone / Telefones IP)
+                  </div>
+                  <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5;">
+                    Servidor / SIP Domain: <strong id="ext-quick-server" style="color: var(--text-main);">192.168.15.36:5080</strong> &bull;
+                    Usuário: <code style="padding: 1px 5px;">1000..1010</code> &bull;
+                    Senha padrão: <code style="padding: 1px 5px;">1234</code> &bull;
+                    Transporte: <strong>UDP</strong> &bull;
+                    Codecs: <strong>PCMU, PCMA, OPUS, G.722</strong>
+                  </div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <button class="btn btn-sm" onclick="copyAllSipConfig()">📋 Copiar Dados Gerais</button>
+                <button class="btn btn-sm" onclick="openSipConfigModal()">📖 Ver Guia Passo a Passo</button>
+                <button class="btn btn-sm" onclick="openSoftphoneModal()">📱 Testar no Softphone</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Seção Especial: Ramais de Atendimento IA (Configurados nos Agentes) -->
+          <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 20px;">🤖</span>
+                <div>
+                  <strong style="font-size: 14px; color: var(--text-main);">Ramais de Atendimento da IA (Agentes Conectados)</strong>
+                  <div style="font-size: 12px; color: var(--text-muted);">Disque estes ramais do seu softphone para falar diretamente com cada agente/persona</div>
+                </div>
+              </div>
+              <button class="btn btn-sm" onclick="switchMainSection('agents')" style="font-size: 11px;">⚙️ Gerenciar Agentes</button>
+            </div>
+            <div id="ai-extensions-cards" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
+              <!-- Preenchido dinamicamente via JS -->
+            </div>
+          </div>
+
+          <!-- Filtro de Busca e Tabela de Ramais SIP -->
+          <div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <h4 style="font-size: 14px; font-weight: 700; color: var(--text-main);">Lista de Ramais SIP Cadastrados</h4>
+                <span class="tag" id="ext-filter-count" style="font-size: 11px;">11 ramais</span>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="ext-search-input" placeholder="🔍 Filtrar por ramal ou nome..." oninput="filterExtensions(this.value)" style="width: 240px; padding: 6px 12px; font-size: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-main);">
+              </div>
+            </div>
+
+            <div class="table-container" style="margin: 0;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ramal</th>
+                    <th>Identificador / Nome & Caller ID</th>
+                    <th>Contexto & Grupo</th>
+                    <th>Status de Registro Sofia</th>
+                    <th>Senha SIP</th>
+                    <th>Endereço / User-Agent</th>
+                    <th style="text-align: right; min-width: 250px;">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="extensions-table-body">
+                  <tr>
+                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                      Carregando ramais SIP...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- MÓDULO 5: CONFIGURAÇÕES -->
         <section id="sec-settings" class="main-section">
 
           <!-- Barra de Navegação Superior Agrupada: Telefonia & Inteligência Artificial -->
