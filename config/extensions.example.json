@@ -1,0 +1,24 @@
+[
+  {
+    "id": "1000",
+    "name": "Ramal 1000 - Suporte Principal",
+    "password": "YOUR_PASSWORD",
+    "context": "default",
+    "callgroup": "techsupport",
+    "effectiveCallerIdName": "Ramal 1000",
+    "effectiveCallerIdNumber": "1000",
+    "vmPassword": "YOUR_VMPASSWORD",
+    "enabled": true
+  },
+  {
+    "id": "1001",
+    "name": "Ramal 1001 - Vendas 1",
+    "password": "YOUR_PASSWORD",
+    "context": "default",
+    "callgroup": "sales",
+    "effectiveCallerIdName": "Ramal 1001",
+    "effectiveCallerIdNumber": "1001",
+    "vmPassword": "YOUR_VMPASSWORD",
+    "enabled": true
+  }
+]

@@ -1,6 +1,22 @@
 node_modules/
 .env
+.env.*
+!.env-example
 dist/
 coverage/
 *.log
+*.bak
+logs/
 recordings/
+models.json
+# Configurações de runtime (podem conter credenciais): use os *.example.json
+config/tenants.json
+config/ai-providers.json
+config/extensions.json
+config/outbound-routes.json
+config/outreach.json
+config/sip-trunks.json
+config/ai-costs.json
+config/routes.json
+config/providers.json
+config/*-history*.json
