@@ -767,6 +767,18 @@ class ElevenLabsS2SBridge extends EventEmitter {
       }
     } catch {}
 
+    try {
+      if (this.mediaBridge && typeof this.mediaBridge.sendEvent === 'function') {
+        this.mediaBridge.sendEvent({
+          type: 'transcript',
+          speaker: role,
+          text: cleanText,
+          timestamp,
+          delayLabel
+        });
+      }
+    } catch {}
+
     return entry;
   }
 
@@ -790,12 +802,15 @@ class ElevenLabsS2SBridge extends EventEmitter {
     return 'trunk_sip';
   }
 
-  async start({ callId, endpoint, dialog, caller = null, called = null }) {
+  async start({ callId, endpoint, dialog, caller = null, called = null, mediaBridge = null }) {
     this.callId = callId;
     this.endpoint = endpoint;
     this.dialog = dialog;
     this.caller = caller;
     this.called = called;
+    if (mediaBridge) {
+      this.mediaBridge = mediaBridge;
+    }
     this.startedAt = new Date();
     this.channelUuid = getChannelUuid(endpoint);
 
@@ -803,7 +818,7 @@ class ElevenLabsS2SBridge extends EventEmitter {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
 
-    this.lineType = this.detectLineType();
+    this.lineType = endpoint?.isWebRtc ? 'softphone' : this.detectLineType();
     this.profiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
     console.log(
       `[${this.callId}] 📞 Linha Detectada: [${this.lineType === 'trunk_sip' ? 'TRONCO SIP / TELEFONIA PÚBLICA' : 'SOFTPHONE INTERNO / TESTE'}] (De: ${this.caller || '--'} | Para: ${this.called || '--'})`

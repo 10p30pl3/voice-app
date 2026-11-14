@@ -26,6 +26,8 @@ const CrosstalkFilter = require('./utils/crosstalk-filter');
 const FrameVad = require('./utils/frame-vad');
 const WsMediaBridge = require('./media/ws-media-bridge');
 const { mediaServer } = require('./media/ws-media-bridge');
+const WebRtcMediaBridge = require('./media/webrtc-media-bridge');
+const { WebRtcEndpointAdapter } = require('./media/webrtc-endpoint-adapter');
 const tenantManager = require('./utils/tenant-manager');
 const trunkManager = require('./utils/trunk-manager');
 const routeManager = require('./utils/route-manager');
@@ -794,12 +796,15 @@ class OpenAIS2SBridge {
     return 'trunk_sip';
   }
 
-  async start({ callId, endpoint, dialog, caller = null, called = null }) {
+  async start({ callId, endpoint, dialog, caller = null, called = null, mediaBridge = null }) {
     this.callId = callId;
     this.endpoint = endpoint;
     this.dialog = dialog;
     this.caller = caller;
     this.called = called;
+    if (mediaBridge) {
+      this.mediaBridge = mediaBridge;
+    }
     this.startedAt = new Date();
     this.channelUuid = getChannelUuid(endpoint);
 
@@ -807,7 +812,7 @@ class OpenAIS2SBridge {
       throw new Error('Não consegui identificar o UUID do canal FreeSWITCH');
     }
 
-    this.lineType = this.detectLineType();
+    this.lineType = endpoint?.isWebRtc ? 'softphone' : this.detectLineType();
     this.profiles = this.profilesByLine[this.lineType] || this.profilesByLine.trunk_sip;
     console.log(
       `[${this.callId}] 📞 Linha Detectada: [${this.lineType === 'trunk_sip' ? 'TRONCO SIP / TELEFONIA PÚBLICA' : 'SOFTPHONE INTERNO / TESTE'}] (De: ${this.caller || '--'} | Para: ${this.called || '--'})`
@@ -1398,6 +1403,17 @@ class OpenAIS2SBridge {
         callHistoryManager.recordCallUpdate(this.callId, {
           transcriptTurnsCount: this.transcriptLog.length,
           lastTurn: entry
+        });
+      }
+    } catch {}
+    try {
+      if (this.mediaBridge && typeof this.mediaBridge.sendEvent === 'function') {
+        this.mediaBridge.sendEvent({
+          type: 'transcript',
+          speaker: role,
+          text: cleanText,
+          timestamp,
+          delayLabel
         });
       }
     } catch {}
@@ -2185,6 +2201,187 @@ trunkManager.attach(fsPool);
     .catch((e) => console.error('[OutboundRouteManager] Falha ao sincronizar rotas de saída:', e.message));
 })();
 
+async function startWebRtcSession({ tenantId, sdpOffer, caller = 'web-visitor', metadata = {} }) {
+  if (isShuttingDown) {
+    throw new Error('Servidor em encerramento');
+  }
+
+  const baseTenant = tenantManager.tenants.get(tenantId) || tenantManager.getDefaultTenant();
+  if (!baseTenant || !baseTenant.active) {
+    throw new Error(`Agente/Tenant "${tenantId}" inativo ou não encontrado`);
+  }
+
+  const extraInstructions = metadata?.instructions ? String(metadata.instructions).trim() : '';
+  const tenant = extraInstructions
+    ? {
+        ...baseTenant,
+        instructions: `${baseTenant.instructions ? baseTenant.instructions + '\n\n' : ''}${extraInstructions}`
+      }
+    : baseTenant;
+
+  const slotCheck = tenantManager.tryAcquireSlot(tenant);
+  if (!slotCheck.allowed) {
+    throw new Error(slotCheck.reason);
+  }
+
+  const callId = `webrtc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const webrtcBridge = new WebRtcMediaBridge();
+  let bridge = null;
+  let sipHandoffState = null;
+  let cleanedUp = false;
+  let tenantSlotReleased = false;
+
+  const releaseTenantSlotOnce = () => {
+    if (tenantSlotReleased) return;
+    tenantSlotReleased = true;
+    tenantManager.releaseSlot(tenant);
+  };
+
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    activeBridges.delete(callId);
+    if (sipHandoffState) {
+      try { sipHandoffState.sipMediaBridge?.stop(); } catch {}
+      try { sipHandoffState.sipDialog?.destroy(); } catch {}
+      try { sipHandoffState.sipEndpoint?.destroy(); } catch {}
+      try { sipHandoffState.releaseNodeSlot?.(); } catch {}
+      sipHandoffState = null;
+    }
+    const aiUsage = aiCostTracker.getCallUsage(callId);
+    let recInfo = null;
+    if (bridge) {
+      recInfo = bridge.recorder ? { recordingFile: bridge.recorder.wavFileName, transcriptFile: bridge.recorder.txtFileName } : null;
+      try {
+        bridge.stop();
+      } catch {}
+    } else {
+      try { webrtcBridge.stop(); } catch {}
+    }
+    callHistoryManager.recordCallEnd({
+      callId,
+      channelUuid: callId,
+      direction: 'web_webrtc',
+      tenantId: tenant.id,
+      caller,
+      called: `web:${tenant.id}`,
+      stsEngine: (tenant.stsEngine || 'openai').toLowerCase(),
+      recordingFile: recInfo?.recordingFile || null,
+      transcriptFile: recInfo?.transcriptFile || null,
+      transcript: bridge?.transcriptLog || [],
+      totalTokens: aiUsage ? aiUsage.totalTokens : undefined
+    });
+    releaseTenantSlotOnce();
+  };
+
+  // Ponte SIP sob demanda (Handoff transparente WebRTC -> Ramal/PSTN FreeSWITCH)
+  const handleTransferToSip = async (target) => {
+    const cleanTarget = String(target || '').trim();
+    if (!cleanTarget) throw new Error('Destino de transferência inválido');
+    if (!fsPool.hasHealthyNode()) throw new Error('Sem nós FreeSWITCH disponíveis para transferência');
+
+    console.log(`[${callId}] 🔀 [HYBRID HANDOFF] Transferindo WebRTC para SIP/FreeSWITCH: ${cleanTarget}`);
+    const from = requireCallerId();
+    const { endpoint: sipEndpoint, dialog: sipDialog, releaseNodeSlot } = await fsPool.originateCall(srf, {
+      to: cleanTarget,
+      from,
+      headers: { 'X-Line-Type': cleanTarget.replace(/\D/g, '').length >= 10 ? 'trunk_sip' : 'softphone' }
+    });
+
+    const sipMediaBridge = new WsMediaBridge();
+    sipHandoffState = { sipEndpoint, sipDialog, sipMediaBridge, releaseNodeSlot };
+
+    await sipMediaBridge.start({
+      callId: `${callId}-sip`,
+      endpoint: sipEndpoint,
+      onAudio: (pcm8k) => {
+        webrtcBridge.pushAudioChunk(pcm8k);
+      }
+    });
+
+    webrtcBridge.attachSipPeer(sipMediaBridge);
+
+    // Encerra apenas a sessão WS da IA mantendo o canal WebRTC e o CallRecorder ativos
+    if (bridge) {
+      try {
+        if (bridge.ws) bridge.ws.close();
+        if (bridge.elevenLabsWs) bridge.elevenLabsWs.close();
+        if (bridge.warningDurationTimer) clearTimeout(bridge.warningDurationTimer);
+        if (bridge.maxDurationTimer) clearTimeout(bridge.maxDurationTimer);
+      } catch {}
+    }
+
+    sipDialog.on('destroy', () => {
+      console.log(`[${callId}] 🔚 Perna SIP transferida encerrada.`);
+      cleanup();
+    });
+  };
+
+  const endpoint = new WebRtcEndpointAdapter({
+    uuid: callId,
+    mediaBridge: webrtcBridge,
+    onTransferRequest: handleTransferToSip,
+    onDestroy: cleanup
+  });
+
+  const sipHeaders = {
+    'x-amd-enabled': 'false',
+    'x-line-type': 'softphone',
+    'x-tenant-id': tenant.id,
+    'x-crosstalk-mode': String(tenant.crosstalkFilter?.mode || 'atual')
+  };
+
+  try {
+    const answer = await webrtcBridge.handleOffer(sdpOffer);
+    bridge = createAiBridge(tenant, sipHeaders);
+    bridge.webrtcBridge = webrtcBridge;
+
+    activeBridges.set(callId, bridge);
+    callHistoryManager.recordCallStart({
+      callId,
+      channelUuid: callId,
+      direction: 'web_webrtc',
+      tenantId: tenant.id,
+      caller,
+      called: `web:${tenant.id}`,
+      stsEngine: (tenant.stsEngine || 'openai').toLowerCase(),
+      amdEnabled: false,
+      sttEnabled: Boolean(tenant.stt?.enabled),
+      bargeinGraceSec: Number(tenant.bargeinGraceSec ?? 1.5),
+      crosstalkMode: sipHeaders['x-crosstalk-mode']
+    });
+
+    webrtcBridge.on('disconnected', cleanup);
+    webrtcBridge.on('client_event', (ev) => {
+      if (!ev || typeof ev !== 'object') return;
+      if (ev.type === 'mute') bridge.setMute(Boolean(ev.muted)).catch(() => {});
+      else if (ev.type === 'interrupt') bridge.interruptAgent().catch(() => {});
+      else if (ev.type === 'hangup') cleanup();
+    });
+
+    await bridge.start({
+      callId,
+      endpoint,
+      dialog: null,
+      caller,
+      called: `web:${tenant.id}`,
+      mediaBridge: webrtcBridge
+    });
+
+    return {
+      callId,
+      sdpAnswer: answer.sdp,
+      type: answer.type,
+      iceServers: answer.iceServers,
+      webrtcBridge,
+      cleanup
+    };
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}
+
 const outreachManager = new OutreachManager({ providerManager, originateCallHandler: originateOutboundCall });
 
 mediaServer.setApiHandler(
@@ -2195,6 +2392,7 @@ mediaServer.setApiHandler(
     whisperPool,
     mediaServer,
     originateCallHandler: originateOutboundCall,
+    webRtcSessionHandler: startWebRtcSession,
     trunkManager,
     routeManager,
     providerManager,

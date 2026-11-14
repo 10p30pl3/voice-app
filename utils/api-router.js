@@ -205,6 +205,9 @@ const API_COMMANDS_CATALOG = [
     category: 'Provedores de Inteligência Artificial & Custos',
     endpoints: [
       { method: 'GET', path: '/v1/ai-providers', description: 'Lista provedores de IA (OpenAI, etc.), status e custo acumulado do mês/total' },
+      { method: 'POST', path: '/v1/ai-providers', description: 'Cadastra novo provedor de IA' },
+      { method: 'PUT', path: '/v1/ai-providers/:id', description: 'Atualiza modelo padrão, voz, codec e API key de um provedor de IA' },
+      { method: 'DELETE', path: '/v1/ai-providers/:id', description: 'Remove um provedor de IA' },
       { method: 'GET', path: '/v1/ai-costs/summary', description: 'Métricas consolidadas de custo de IA no mês atual e histórico' },
       { method: 'GET', path: '/v1/ai-costs/statement', description: 'Extrato detalhado de uso por requisição (tokens texto/áudio e custo USD)' }
     ]
@@ -221,9 +224,57 @@ const API_COMMANDS_CATALOG = [
   }
 ];
 
-function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, mediaServer, originateCallHandler, trunkManager, routeManager, providerManager, outreachManager, callHistoryManager, aiCostTracker, extensionManager, outboundRouteManager, aiProviderManager }) {
+function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, mediaServer, originateCallHandler, webRtcSessionHandler, trunkManager, routeManager, providerManager, outreachManager, callHistoryManager, aiCostTracker, extensionManager, outboundRouteManager, aiProviderManager }) {
   const defaultRecDir = process.env.RECORDING_DIR || path.join(__dirname, '..', 'recordings');
   const dashboardHtmlPath = path.join(__dirname, '..', 'public', 'dashboard.html');
+  const webrtcTokenSecret = process.env.WEBRTC_TOKEN_SECRET || process.env.API_AUTH_TOKEN || crypto.randomBytes(32).toString('hex');
+  const usedWebRtcNonces = new Map();
+  const webRtcIpHits = new Map();
+
+  function issueWebRtcToken({ tenantId = 'default', caller = 'web-visitor', metadata = {}, ttlSec = 60 }) {
+    const exp = Date.now() + Math.max(15, Math.min(300, Number(ttlSec) || 60)) * 1000;
+    const nonce = crypto.randomBytes(12).toString('hex');
+    const payloadB64 = Buffer.from(JSON.stringify({ tid: tenantId, caller, metadata, nonce, exp })).toString('base64url');
+    const sig = crypto.createHmac('sha256', webrtcTokenSecret).update(payloadB64).digest('base64url');
+    return `${payloadB64}.${sig}`;
+  }
+
+  function verifyWebRtcToken(token) {
+    if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+    const [payloadB64, sig] = token.split('.');
+    const expectedSig = crypto.createHmac('sha256', webrtcTokenSecret).update(payloadB64).digest('base64url');
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expectedSig);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    let payload;
+    try {
+      payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    } catch {
+      return null;
+    }
+    const now = Date.now();
+    for (const [k, exp] of usedWebRtcNonces.entries()) {
+      if (exp < now) usedWebRtcNonces.delete(k);
+    }
+    if (!payload?.nonce || !payload?.exp || payload.exp < now || usedWebRtcNonces.has(payload.nonce)) {
+      return null;
+    }
+    usedWebRtcNonces.set(payload.nonce, payload.exp);
+    return payload;
+  }
+
+  function checkWebRtcRateLimit(ip, limitPerMin = 15) {
+    const now = Date.now();
+    const key = String(ip || 'unknown');
+    const entry = webRtcIpHits.get(key) || { count: 0, resetAt: now + 60000 };
+    if (now > entry.resetAt) {
+      entry.count = 0;
+      entry.resetAt = now + 60000;
+    }
+    entry.count += 1;
+    webRtcIpHits.set(key, entry);
+    return entry.count <= limitPerMin;
+  }
   let lastDiagnosticsResult = null;
   const RECORDINGS_CACHE_TTL_MS = 5000;
   let recordingsCache = { builtAt: 0, items: [] };
@@ -559,11 +610,137 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       }
     }
 
+    // Servir SDK WebRTC embeddable (voll-voice-widget.js)
+    if ((req.method === 'GET' || req.method === 'HEAD') && pathname === '/voll-voice-widget.js') {
+      try {
+        const widgetPath = path.join(__dirname, '..', 'public', 'voll-voice-widget.js');
+        if (fs.existsSync(widgetPath)) {
+          const js = await fs.promises.readFile(widgetPath, 'utf8');
+          res.writeHead(200, {
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Content-Length': Buffer.byteLength(js),
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store'
+          });
+          if (req.method === 'HEAD') res.end();
+          else res.end(js);
+          return true;
+        }
+      } catch (err) {
+        console.error('[Static] Erro ao carregar voll-voice-widget.js:', err.message);
+      }
+    }
+
     if (!pathname.startsWith('/v1') && !pathname.startsWith('/api/v1')) {
       return false;
     }
 
     const cleanPath = pathname.startsWith('/api/v1') ? pathname.slice(4) : pathname;
+
+    // Endpoints WebRTC públicos/efêmeros (autenticação via sessionToken, publicWidgetKey+Origin ou API_AUTH_TOKEN)
+    if (req.method === 'POST' && cleanPath === '/v1/webrtc/offer') {
+      if (typeof webRtcSessionHandler !== 'function') {
+        sendJson(res, 501, { error: 'not_implemented', message: 'Canal WebRTC não habilitado neste servidor' });
+        return true;
+      }
+      const body = await readJsonBody(req);
+      if (!body.sdpOffer) {
+        sendJson(res, 400, { error: 'bad_request', message: 'Campo "sdpOffer" é obrigatório' });
+        return true;
+      }
+
+      const configuredToken = process.env.API_AUTH_TOKEN;
+      const authHeader = req.headers['authorization'] || '';
+      const apiKeyHeader = req.headers['x-api-key'] || '';
+      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+      const hasApiToken = !configuredToken || bearerToken === configuredToken || apiKeyHeader === configuredToken;
+
+      let resolvedTenantId = body.tenantId || body.agentId || 'default';
+      let resolvedCaller = body.caller || 'web-visitor';
+      let resolvedMetadata = body.metadata || {};
+
+      if (body.sessionToken) {
+        const tokenData = verifyWebRtcToken(body.sessionToken);
+        if (!tokenData) {
+          sendJson(res, 401, { error: 'invalid_session_token', message: 'sessionToken WebRTC inválido, expirado ou já utilizado' });
+          return true;
+        }
+        resolvedTenantId = tokenData.tid || resolvedTenantId;
+        resolvedCaller = tokenData.caller || resolvedCaller;
+        resolvedMetadata = { ...tokenData.metadata, ...resolvedMetadata };
+      } else if (body.publicWidgetKey) {
+        const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+        if (!checkWebRtcRateLimit(clientIp, 15)) {
+          sendJson(res, 429, { error: 'rate_limited', message: 'Muitas tentativas de chamada WebRTC. Aguarde 1 minuto.' });
+          return true;
+        }
+        const matchedTenant = tenantManager.listTenants().find((t) => t.active && t.publicWidgetKey === body.publicWidgetKey);
+        if (!matchedTenant) {
+          sendJson(res, 401, { error: 'invalid_widget_key', message: 'publicWidgetKey inválida ou agente inativo' });
+          return true;
+        }
+        const origin = req.headers.origin || '';
+        const allowed = Array.isArray(matchedTenant.allowedOrigins) ? matchedTenant.allowedOrigins : [];
+        if (allowed.length > 0 && !allowed.includes('*') && !allowed.includes(origin)) {
+          sendJson(res, 403, { error: 'origin_forbidden', message: `Origem "${origin}" não autorizada para este widget` });
+          return true;
+        }
+        resolvedTenantId = matchedTenant.id;
+      } else if (!hasApiToken) {
+        sendJson(res, 401, { error: 'unauthorized', message: 'Informe sessionToken, publicWidgetKey ou API_AUTH_TOKEN' });
+        return true;
+      }
+
+      try {
+        const session = await webRtcSessionHandler({
+          tenantId: resolvedTenantId,
+          sdpOffer: body.sdpOffer,
+          caller: resolvedCaller,
+          metadata: resolvedMetadata
+        });
+        sendJson(res, 200, {
+          ok: true,
+          callId: session.callId,
+          sdpAnswer: session.sdpAnswer,
+          type: session.type,
+          iceServers: session.iceServers
+        });
+      } catch (err) {
+        sendJson(res, 400, { error: 'webrtc_offer_failed', message: err.message });
+      }
+      return true;
+    }
+
+    const webrtcIceMatch = cleanPath.match(/^\/v1\/webrtc\/([^/]+)\/ice$/);
+    if (req.method === 'POST' && webrtcIceMatch) {
+      const targetCallId = decodeURIComponent(webrtcIceMatch[1]);
+      const bridge = activeBridges.get(targetCallId);
+      if (!bridge || !bridge.webrtcBridge) {
+        sendJson(res, 404, { error: 'not_found', message: 'Sessão WebRTC não encontrada' });
+        return true;
+      }
+      const body = await readJsonBody(req);
+      if (body.candidate) {
+        await bridge.webrtcBridge.addIceCandidate(body.candidate);
+      }
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
+
+    const webrtcCallMatch = cleanPath.match(/^\/v1\/webrtc\/([^/]+)$/);
+    if (req.method === 'DELETE' && webrtcCallMatch) {
+      const targetCallId = decodeURIComponent(webrtcCallMatch[1]);
+      const bridge = activeBridges.get(targetCallId);
+      if (!bridge) {
+        sendJson(res, 404, { error: 'not_found', message: 'Sessão WebRTC não encontrada' });
+        return true;
+      }
+      try {
+        await bridge.stop();
+      } catch {}
+      sendJson(res, 200, { ok: true, callId: targetCallId });
+      return true;
+    }
 
     // Autenticação opcional por Token (se API_AUTH_TOKEN estiver definido no .env)
     const configuredToken = process.env.API_AUTH_TOKEN;
@@ -590,6 +767,30 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       body = await readJsonBody(req);
     } catch (err) {
       sendJson(res, 400, { error: 'bad_request', message: err.message });
+      return true;
+    }
+
+    // Emissão de Token Efêmero WebRTC (protegido por API_AUTH_TOKEN, uso único, TTL 60s)
+    if (req.method === 'POST' && cleanPath === '/v1/webrtc/token') {
+      const tenantId = body.tenantId || body.agentId || 'default';
+      const tenant = tenantManager.tenants.get(tenantId) || tenantManager.getDefaultTenant();
+      if (!tenant || !tenant.active) {
+        sendJson(res, 404, { error: 'tenant_not_found', message: `Agente "${tenantId}" não encontrado ou inativo` });
+        return true;
+      }
+      const ttlSec = Math.max(15, Math.min(300, Number(body.ttlSec) || 60));
+      const sessionToken = issueWebRtcToken({
+        tenantId: tenant.id,
+        caller: body.caller || 'web-visitor',
+        metadata: body.metadata || {},
+        ttlSec
+      });
+      sendJson(res, 200, {
+        ok: true,
+        sessionToken,
+        expiresInSec: ttlSec,
+        tenantId: tenant.id
+      });
       return true;
     }
 
@@ -1475,12 +1676,33 @@ function createApiRouter({ activeBridges, tenantManager, fsPool, whisperPool, me
       return true;
     }
 
+    if (cleanPath === '/v1/ai-providers' && req.method === 'POST') {
+      try {
+        const created = aiProvMgr.create(body);
+        sendJson(res, 201, { ok: true, provider: created });
+      } catch (err) {
+        fail(400, err);
+      }
+      return true;
+    }
+
     const aiProvMatch = cleanPath.match(/^\/v1\/ai-providers\/([^/]+)$/);
     if (aiProvMatch && (req.method === 'PUT' || req.method === 'POST')) {
       const provId = decodeURIComponent(aiProvMatch[1]);
       try {
         const updated = aiProvMgr.update(provId, body);
         sendJson(res, 200, { ok: true, provider: updated });
+      } catch (err) {
+        fail(400, err);
+      }
+      return true;
+    }
+
+    if (aiProvMatch && req.method === 'DELETE') {
+      const provId = decodeURIComponent(aiProvMatch[1]);
+      try {
+        const result = aiProvMgr.delete(provId);
+        sendJson(res, 200, result);
       } catch (err) {
         fail(400, err);
       }

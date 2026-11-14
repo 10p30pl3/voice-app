@@ -394,6 +394,12 @@ class TenantManager {
       extension: data.extension !== undefined
         ? (String(data.extension || '').trim() || null)
         : (existing.extension || (data.id === 'default' ? '9000' : null)),
+      publicWidgetKey: data.publicWidgetKey !== undefined
+        ? (String(data.publicWidgetKey || '').trim() || null)
+        : (existing.publicWidgetKey || null),
+      allowedOrigins: Array.isArray(data.allowedOrigins)
+        ? data.allowedOrigins.map((o) => String(o || '').trim()).filter(Boolean)
+        : (Array.isArray(existing.allowedOrigins) ? existing.allowedOrigins : []),
       greetingInstructions: data.greetingInstructions !== undefined
         ? (String(data.greetingInstructions || '').trim() || null)
         : (existing.greetingInstructions || defaultTenant.greetingInstructions),

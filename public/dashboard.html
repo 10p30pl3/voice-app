@@ -2592,6 +2592,7 @@
                     <span id="txt-refresh">Ao Vivo (1.5s)</span>
                   </button>
                   <button class="btn btn-sm" onclick="fetchCallsData()">Atualizar</button>
+                  <button class="btn btn-sm" onclick="openWebRtcTestWidget()">🌐 WebRTC Navegador</button>
                   <button class="btn btn-primary btn-sm" onclick="openOriginateModal()">
                     <span>+ Chamada de Teste</span>
                   </button>
@@ -3047,7 +3048,8 @@
               </div>
               <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                 <button class="btn btn-sm" onclick="loadAiProvidersTab()">🔄 Atualizar Custos</button>
-                <button class="btn btn-sm btn-primary" onclick="openAiCostModal()">📊 Extrato de Uso Detalhado</button>
+                <button class="btn btn-sm" onclick="openAiCostModal()">📊 Extrato de Uso Detalhado</button>
+                <button class="btn btn-sm btn-primary" onclick="openAiProviderConfigModal()">➕ Novo Provedor IA</button>
               </div>
             </div>
 
@@ -3441,7 +3443,17 @@
         <button class="btn btn-sm" onclick="closeModal('modal-ai-provider-config')">✕</button>
       </div>
       <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
-        <input type="hidden" id="aiprov-id">
+        <input type="hidden" id="aiprov-is-new" value="0">
+        <div id="group-aiprov-identity" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="form-group" style="margin: 0;">
+            <label>ID do Provedor *</label>
+            <input type="text" id="aiprov-id" placeholder="ex: gemini-live">
+          </div>
+          <div class="form-group" style="margin: 0;">
+            <label>Nome de Exibição</label>
+            <input type="text" id="aiprov-name" placeholder="ex: Gemini Live API">
+          </div>
+        </div>
 
         <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 8px;">
           <div>
@@ -4051,6 +4063,38 @@
               <input type="number" step="0.05" min="0.1" max="1" id="tenant-crosstalk-ratio" placeholder="0.45" value="0.45">
               <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Somente modo "Atual (DSP)". Padrão 0.45.</small>
             </div>
+          </div>
+        </div>
+
+        <!-- Seção 6: Canal WebRTC / Widget Web -->
+        <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+          <h4 style="font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span>🌐 Canal WebRTC / Widget na Página Web</span>
+          </h4>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+            <div class="form-group">
+              <label>Chave Pública do Widget (<code>publicWidgetKey</code>)</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="tenant-public-widget-key" placeholder="Opcional (ex: pk_live_...)" oninput="updateWebRtcSnippet()">
+                <button type="button" class="btn btn-sm" onclick="generateWidgetKey()" style="white-space: nowrap;">🎲 Gerar Chave</button>
+              </div>
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Para embutir em sites estáticos sem backend. Em apps logados, prefira Token Efêmero (<code>POST /v1/webrtc/token</code>).</small>
+            </div>
+            <div class="form-group">
+              <label>Origens Permitidas (CORS / Widget)</label>
+              <input type="text" id="tenant-allowed-origins" placeholder="Ex: https://meusite.com, http://127.0.0.1:8090 ou *">
+              <small style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">Separe por vírgula. Vazio ou <code>*</code> aceita qualquer domínio.</small>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label style="margin-bottom: 0;">Código HTML para Embutir na Página Web</label>
+              <div style="display: flex; gap: 6px;">
+                <button type="button" class="btn btn-sm" onclick="copyWebRtcSnippet()">📋 Copiar Código</button>
+                <button type="button" class="btn btn-sm btn-primary" onclick="testCurrentModalAgentWebRtc()">🎙️ Testar no Navegador</button>
+              </div>
+            </div>
+            <textarea id="tenant-webrtc-snippet" rows="3" readonly style="font-family: monospace; font-size: 11.5px; background: var(--bg-soft);"></textarea>
           </div>
         </div>
       </div>
@@ -6894,6 +6938,8 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
         document.getElementById('tenant-crosstalk-mode').value = xtalkMode;
         document.getElementById('tenant-crosstalk-threshold').value = t.crosstalkFilter?.threshold ?? '';
         document.getElementById('tenant-crosstalk-ratio').value = t.crosstalkFilter?.ratio ?? 0.45;
+        document.getElementById('tenant-public-widget-key').value = t.publicWidgetKey || '';
+        document.getElementById('tenant-allowed-origins').value = Array.isArray(t.allowedOrigins) ? t.allowedOrigins.join(', ') : '';
       } else {
         titleEl.innerHTML = '<span>🧠 + Novo Tenant / Configurar Prompt da IA</span>';
         idInput.disabled = false;
@@ -6923,11 +6969,52 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
         document.getElementById('tenant-crosstalk-mode').value = 'atual';
         document.getElementById('tenant-crosstalk-threshold').value = '';
         document.getElementById('tenant-crosstalk-ratio').value = 0.45;
+        document.getElementById('tenant-public-widget-key').value = '';
+        document.getElementById('tenant-allowed-origins').value = '';
       }
 
       toggleStsEngineFields();
       updateCharCount();
+      updateWebRtcSnippet();
       openModal('modal-tenant-editor');
+    }
+
+    function generateWidgetKey() {
+      const rand = Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b => b.toString(16).padStart(2, '0')).join('');
+      const el = document.getElementById('tenant-public-widget-key');
+      if (el) {
+        el.value = `pk_live_${rand}`;
+        updateWebRtcSnippet();
+      }
+    }
+
+    function updateWebRtcSnippet() {
+      const id = (document.getElementById('tenant-id')?.value || 'default').trim() || 'default';
+      const name = (document.getElementById('tenant-name')?.value || 'Atendente IA').trim() || 'Atendente IA';
+      const key = (document.getElementById('tenant-public-widget-key')?.value || '').trim();
+      const snippetEl = document.getElementById('tenant-webrtc-snippet');
+      if (!snippetEl) return;
+      const origin = window.location.origin;
+      const keyAttr = key ? ` data-widget-key="${key}"` : ' data-widget-key="SUA_PUBLIC_WIDGET_KEY"';
+      snippetEl.value = `<script src="${origin}/voll-voice-widget.js" data-voll-auto="true" data-agent-id="${id}"${keyAttr} data-title="${name}"></` + `script>`;
+    }
+
+    async function copyWebRtcSnippet() {
+      const snippetEl = document.getElementById('tenant-webrtc-snippet');
+      if (!snippetEl) return;
+      try {
+        await navigator.clipboard.writeText(snippetEl.value);
+        alert('Código HTML do widget WebRTC copiado!');
+      } catch {
+        snippetEl.select();
+        document.execCommand('copy');
+      }
+    }
+
+    function testCurrentModalAgentWebRtc() {
+      const id = (document.getElementById('tenant-id')?.value || 'default').trim() || 'default';
+      const name = (document.getElementById('tenant-name')?.value || id).trim();
+      openWebRtcTestWidget(id, name);
     }
 
     async function saveTenantFromModal() {
@@ -6960,6 +7047,9 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       const rawThreshold = document.getElementById('tenant-crosstalk-threshold').value.trim();
       const crosstalkThreshold = rawThreshold === '' ? null : parseFloat(rawThreshold);
       const crosstalkRatio = parseFloat(document.getElementById('tenant-crosstalk-ratio').value) || 0.45;
+      const publicWidgetKey = document.getElementById('tenant-public-widget-key')?.value.trim() || null;
+      const rawOrigins = document.getElementById('tenant-allowed-origins')?.value.trim() || '';
+      const allowedOrigins = rawOrigins ? rawOrigins.split(',').map(s => s.trim()).filter(Boolean) : [];
 
       const payload = {
         id,
@@ -6985,7 +7075,9 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
           mode: crosstalkMode,
           ratio: crosstalkRatio,
           threshold: crosstalkThreshold
-        }
+        },
+        publicWidgetKey,
+        allowedOrigins
       };
 
       const btn = document.getElementById('btn-save-tenant');
@@ -7111,6 +7203,7 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
                 <div style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
                   ${t.amd?.enabled ? '<span class="tag">AMD</span>' : ''}
                   ${t.stt?.enabled ? '<span class="tag">STT</span>' : ''}
+                  ${t.publicWidgetKey ? '<span class="tag tag-success" title="Widget WebRTC Público Ativo">🌐 WebRTC</span>' : ''}
                   ${(t.crosstalkFilter?.mode || t.crosstalkMode) === 'wespeaker' ? '<span class="tag">🧬 WeSpeaker</span>'
                     : (t.crosstalkFilter?.mode || t.crosstalkMode) === 'ecapa' ? '<span class="tag">🧠 ECAPA</span>'
                     : (t.crosstalkFilter?.mode || t.crosstalkMode) === 'none' ? '<span class="tag" style="color: var(--text-dim);">Filtro Off</span>'
@@ -7118,6 +7211,7 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
                 </div>
               </td>
               <td style="text-align: right; white-space: nowrap;">
+                <button class="btn btn-sm" title="Testar Agente via WebRTC no Navegador" onclick="openWebRtcTestWidget('${escapeHtml(t.id)}', '${escapeHtml(t.name || t.id)}')">🌐</button>
                 <button class="btn btn-sm" onclick="openTenantModal('${escapeHtml(t.id)}')">✏️ Editar</button>
                 ${t.id !== 'default' ? `<button class="btn btn-sm btn-danger" style="margin-left: 4px;" title="Remover Tenant" onclick="deleteTenantPrompt('${escapeHtml(t.id)}')">🗑️</button>` : ''}
               </td>
@@ -8648,6 +8742,9 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
             <button class="btn btn-sm" style="margin-left: 6px;" onclick="openAiProviderConfigModal('${escapeHtml(p.id)}')">
               ⚙️ Configurar
             </button>
+            <button class="btn btn-sm btn-danger" style="margin-left: 6px;" title="Excluir Provedor" onclick="deleteAiProvider('${escapeHtml(p.id)}')">
+              🗑️
+            </button>
           </td>
         </tr>`;
       }).join('');
@@ -8658,12 +8755,18 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       if (bCalls) bCalls.textContent = totalCalls.toLocaleString('pt-BR');
     }
 
-    function openAiProviderConfigModal(providerId) {
-      const p = aiProvidersCache.find(x => x.id === providerId) || {};
-      document.getElementById('aiprov-id').value = providerId;
-      document.getElementById('aiprov-modal-title').textContent = `Configurar ${p.name || providerId}`;
-      document.getElementById('aiprov-modal-icon').textContent = p.icon || '⚙️';
-      document.getElementById('aiprov-active').checked = p.active !== false;
+    function openAiProviderConfigModal(providerId = null) {
+      const isNew = !providerId;
+      const p = providerId ? (aiProvidersCache.find(x => x.id === providerId) || {}) : {};
+      document.getElementById('aiprov-is-new').value = isNew ? '1' : '0';
+      const idEl = document.getElementById('aiprov-id');
+      const nameEl = document.getElementById('aiprov-name');
+      idEl.value = providerId || '';
+      idEl.disabled = !isNew;
+      if (nameEl) nameEl.value = p.name || '';
+      document.getElementById('aiprov-modal-title').textContent = isNew ? 'Novo Provedor de IA' : `Configurar ${p.name || providerId}`;
+      document.getElementById('aiprov-modal-icon').textContent = isNew ? '➕' : (p.icon || '⚙️');
+      document.getElementById('aiprov-active').checked = isNew ? true : p.active !== false;
       document.getElementById('aiprov-apikey').value = '';
       document.getElementById('aiprov-apikey').placeholder = p.apiKey ? p.apiKey : 'Informe a API Key';
 
@@ -8675,13 +8778,13 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
         codecSelect.value = p.audioCodec || 'g711_ulaw';
       }
 
-      const models = p.models || [];
+      const models = isNew ? ['default-realtime'] : (p.models || []);
       modelSelect.innerHTML = models.map(m => `<option value="${escapeHtml(m)}" ${m === p.defaultModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
       if (!models.length && p.defaultModel) {
         modelSelect.innerHTML = `<option value="${escapeHtml(p.defaultModel)}" selected>${escapeHtml(p.defaultModel)}</option>`;
       }
 
-      const voices = p.voices || [];
+      const voices = isNew ? ['alloy'] : (p.voices || []);
       voiceSelect.innerHTML = voices.map(v => `<option value="${escapeHtml(v)}" ${v === p.defaultVoice ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('');
       if (!voices.length && p.defaultVoice) {
         voiceSelect.innerHTML = `<option value="${escapeHtml(p.defaultVoice)}" selected>${escapeHtml(p.defaultVoice)}</option>`;
@@ -8736,8 +8839,12 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
     }
 
     async function saveAiProviderConfig() {
-      const id = document.getElementById('aiprov-id').value;
-      if (!id) return;
+      const isNew = document.getElementById('aiprov-is-new')?.value === '1';
+      const id = document.getElementById('aiprov-id').value.trim().toLowerCase();
+      const name = document.getElementById('aiprov-name')?.value.trim() || id;
+      if (!id) {
+        return showToast('Informe o ID do provedor de IA.', 'error');
+      }
 
       const active = document.getElementById('aiprov-active').checked;
       const apiKey = document.getElementById('aiprov-apikey').value.trim();
@@ -8745,9 +8852,10 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       const defaultVoice = document.getElementById('aiprov-default-voice').value;
       const audioCodec = document.getElementById('aiprov-codec')?.value || 'g711_ulaw';
       const p = aiProvidersCache.find(x => x.id === id);
-      const models = p && p.models ? p.models : [];
+      const models = p && p.models ? p.models : (defaultModel ? [defaultModel] : []);
 
       const payload = {
+        ...(isNew ? { id, name } : { name }),
         active,
         defaultModel,
         defaultVoice,
@@ -8763,15 +8871,15 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       btn.innerHTML = 'Salvando...';
 
       try {
-        const res = await apiFetch(`/v1/ai-providers/${encodeURIComponent(id)}`, {
-          method: 'PUT',
+        const res = await apiFetch(isNew ? '/v1/ai-providers' : `/v1/ai-providers/${encodeURIComponent(id)}`, {
+          method: isNew ? 'POST' : 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || 'Falha ao salvar provedor');
 
-        showToast(`✅ Provedor "${data.provider?.name || id}" atualizado com sucesso!`, 'success');
+        showToast(`✅ Provedor "${data.provider?.name || id}" ${isNew ? 'criado' : 'atualizado'} com sucesso!`, 'success');
         closeModal('modal-ai-provider-config');
         await loadAiProvidersTab();
       } catch (err) {
@@ -8779,6 +8887,19 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
       } finally {
         btn.disabled = false;
         btn.innerHTML = origText;
+      }
+    }
+
+    async function deleteAiProvider(id) {
+      if (!confirm(`Deseja realmente excluir o provedor de IA "${id}"?`)) return;
+      try {
+        const res = await apiFetch(`/v1/ai-providers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Falha ao excluir provedor');
+        showToast(`Provedor "${id}" excluído.`, 'info');
+        await loadAiProvidersTab();
+      } catch (err) {
+        showToast(`Erro ao excluir: ${escapeHtml(err.message)}`, 'error');
       }
     }
 
@@ -8918,6 +9039,25 @@ Para mais detalhes, acesse: vollsolutions.com.br/planos-e-precos
     fetchVoiceFeatures();
     startAutoRefresh();
     initHistorySSE();
+  </script>
+  <script src="/voll-voice-widget.js"></script>
+  <script>
+    let _vollWidgetInstance = null;
+    function openWebRtcTestWidget(tenantId = 'default', tenantName = '') {
+      if (!window.VollVoiceWidget) return;
+      if (_vollWidgetInstance && _vollWidgetInstance.host) {
+        try { _vollWidgetInstance.client?.stop(); } catch {}
+        _vollWidgetInstance.host.remove();
+      }
+      const token = (typeof getSavedApiToken === 'function' ? getSavedApiToken() : localStorage.getItem('VOLL_API_TOKEN')) || '';
+      _vollWidgetInstance = window.VollVoiceWidget.mount({
+        serverUrl: window.location.origin,
+        tenantId: tenantId || 'default',
+        apiToken: token || undefined,
+        title: `WebRTC · ${tenantName || tenantId || 'Voll Connect'}`,
+        autoOpen: true
+      });
+    }
   </script>
 </body>
 </html>
